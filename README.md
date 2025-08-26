@@ -22,3 +22,4 @@ The built files are output to `dist/`.
 Pushes to `main` trigger the GitHub Actions workflow in `.github/workflows/deploy.yml` which builds and publishes the site to GitHub Pages.
 
 [![Deploy to GitHub Pages](https://github.com/HRussellZFAC023/UserScript-Compiler/actions/workflows/deploy.yml/badge.svg)](https://github.com/HRussellZFAC023/UserScript-Compiler/actions/workflows/deploy.yml)
+
