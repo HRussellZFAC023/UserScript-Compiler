@@ -39,7 +39,7 @@ export default function App() {
         Userscript → Firefox Extension Converter
       </h1>
       <p className="mb-4 text-gray-800">
-        Convert a Tampermonkey/Greasemonkey userscript into a Firefox add-on (Manifest V3).
+        Convert a Tampermonkey/Greasemonkey userscript into a Firefox add-on (Manifest V3, including GM_ methods and eval)
         Paste the script text below or upload the <code className="bg-gray-200 px-1 py-0.5 rounded">.user.js</code> file, then click "Convert".
       </p>
 
