@@ -1,0 +1,8 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* You can add custom global styles or overrides below if needed.
+   For example:
+   body { @apply bg-gray-50 text-gray-900; }
+   (Global styles can also be applied via Tailwind utility classes on <body> in index.html) */
