@@ -13,6 +13,11 @@ jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
 
+    # Prevent overlapping deploys — cancel any in-progress deploy for the same ref
+    concurrency:
+      group: pages-deploy-${{ github.ref }}
+      cancel-in-progress: true
+
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
@@ -34,11 +39,12 @@ jobs:
 
       - name: Configure GitHub Pages
         uses: actions/configure-pages@v3
+
       - name: Upload build artifact
         uses: actions/upload-pages-artifact@v3
         with:
           path: ./dist
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
-
