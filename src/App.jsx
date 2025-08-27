@@ -36,7 +36,7 @@ export default function App() {
   return (
     <div className="p-4 max-w-xl mx-auto">
       <h1 className="text-2xl font-bold mb-4 text-center">
-        Userscript → Browser Extension Converter
+        ✨ Userscript → Browser Extension Converter
       </h1>
       <p className="mb-4 text-gray-800">
         Convert a Tampermonkey/Greasemonkey userscript into a Firefox or Chrome add-on (Manifest V3).
