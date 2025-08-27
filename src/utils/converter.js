@@ -147,7 +147,8 @@ function buildManifest(meta) {
     optional_permissions: ['userScripts'],
     browser_specific_settings: {
       gecko: { id: 'converted-userscript@example.com' }
-    }
+    },
+    minimum_chrome_version: '120'
   };
 }
 
@@ -354,6 +355,16 @@ function GM_xmlhttpRequest(details) {
     if (!cbs) return;
     if (resp && resp.success) {
       const r = resp.result;
+      // Make JSON data accessible for dynamic element parsing
+      try {
+        if (r && r.response && typeof r.response === 'object') {
+          window.z = r.response.data && Array.isArray(r.response.data.children)
+            ? r.response.data
+            : r.response;
+        }
+      } catch (e) {
+        console.error('Unable to set global z for dynamic elements:', e);
+      }
       const xhr = {
         response: r.response,
         readyState: 4,
@@ -416,6 +427,20 @@ function GM_notification(textOrDetails, title) {
     t = textOrDetails.title || '';
   }
   gmCall('GM_notification', { text, title: t }).catch(() => {});
+}
+function parseDynamicElements(raw) {
+  if (!raw) return [];
+  try {
+    const Fn = function () {}.constructor;
+    const fn = new Fn('return ( ' + raw + ' )');
+    const v = fn();
+    const res = typeof v === 'function' ? v(window.z) : v;
+    if (Array.isArray(res)) return res;
+    if (res && typeof res === 'object') return [res];
+  } catch (e) {
+    console.error('Error parsing dynamic elements:', e);
+  }
+  return [];
 }
 const GM_info = ${JSON.stringify(gmInfo)};
 `;
