@@ -141,7 +141,7 @@ function buildManifest(meta) {
     description: meta.description || '',
     version: meta.version || '1.0.0',
     action: { default_title: 'Enable Userscript' },
-    background: { scripts: ['background.js'] },
+    background: { scripts: ['background.js'], service_worker: 'background.js' },
     host_permissions: hostPerms,
     permissions,
     optional_permissions: ['userScripts'],
@@ -157,9 +157,10 @@ function generateBackgroundScriptCode(meta) {
   const scriptId = `us_${sanitizedName || 'script'}`;
 
   return `(() => {
+  const browser = globalThis.browser || globalThis.chrome;
   let registered = false;
   async function registerIfPossible() {
-    if (!browser.userScripts) return;
+    if (!browser?.userScripts) return;
     try {
       await browser.userScripts.configureWorld({
         messaging: true,
@@ -303,6 +304,7 @@ function generateUserScriptAPICode(meta) {
     }
   } catch {}
 })();
+const browser = globalThis.browser || globalThis.chrome;
 const GM_VALUES = {};
 const __GM_XHR_CB = new Map();
 let __GM_XHR_SEQ = 0;
