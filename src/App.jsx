@@ -36,10 +36,10 @@ export default function App() {
   return (
     <div className="p-4 max-w-xl mx-auto">
       <h1 className="text-2xl font-bold mb-4 text-center">
-        Userscript → Firefox Extension Converter
+        Userscript → Browser Extension Converter
       </h1>
       <p className="mb-4 text-gray-800">
-        Convert a Tampermonkey/Greasemonkey userscript into a Firefox add-on (Manifest V3, including GM_ methods and eval)
+        Convert a Tampermonkey/Greasemonkey userscript into a Firefox or Chrome add-on (Manifest V3).
         Paste the script text below or upload the <code className="bg-gray-200 px-1 py-0.5 rounded">.user.js</code> file, then click "Convert".
       </p>
 
@@ -79,10 +79,21 @@ export default function App() {
           >
             Download Extension ZIP
           </a>
-          <p className="text-sm text-gray-700 mt-2">
-            After downloading, load the ZIP as a temporary add-on in Firefox.
-            Click the extension’s toolbar icon once to grant <code>userScripts</code> permission and register the userscript.
-          </p>
+          <ul className="list-disc pl-6 mt-4 text-gray-700 text-sm">
+            <li>
+              <b>Chrome:</b> <code>chrome://extensions</code> → Enable <b>Developer mode</b> → <b>Load unpacked</b> → pick the unzipped folder. The popup will open.
+            </li>
+            <li>
+              <b>Firefox:</b> <code>about:debugging</code> → <b>This Firefox</b> → <b>Load Temporary Add-on</b> → select <code>manifest.json</code>. Click <b>Grant permission</b> when asked.
+            </li>
+          </ul>
+          <div className="mt-4 bg-yellow-50 border-l-4 border-yellow-300 p-3 rounded flex items-start">
+            <span className="mr-2 text-yellow-600 text-lg" aria-hidden="true">⚠️</span>
+            <div>
+              <b>Note:</b> After loading the extension, <b>click the extension’s toolbar icon once</b> to grant <code>userScripts</code> permission and register the userscript.
+              <div className="text-gray-700 mt-1">This step is required for the userscript to activate.</div>
+            </div>
+          </div>
         </div>
       )}
     </div>
