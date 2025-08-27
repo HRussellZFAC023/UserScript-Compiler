@@ -141,7 +141,7 @@ function buildManifest(meta) {
     description: meta.description || '',
     version: meta.version || '1.0.0',
     action: { default_title: 'Enable Userscript' },
-    background: { scripts: ['background.js'] },
+    background: { scripts: ['background.js'], service_worker: 'background.js' },
     host_permissions: hostPerms,
     permissions,
     optional_permissions: ['userScripts'],
