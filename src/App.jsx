@@ -81,7 +81,7 @@ export default function App() {
           </a>
           <ul className="list-disc pl-6 mt-4 text-gray-700 text-sm">
             <li>
-              <b>Chrome:</b> <code>chrome://extensions</code> → Enable <b>Developer mode</b> → <b>Load unpacked</b> → pick the unzipped folder. The popup will open.
+              <b>Chrome:</b> <code>chrome://extensions</code> → enable <b>Developer mode</b> → <b>Load unpacked</b> → pick the unzipped folder. Open the extension’s <b>Details</b> and switch on <b>Allow User Scripts</b> (or enable the <code>#enable-extension-content-script-user-script</code> flag on older versions). The popup will open.
             </li>
             <li>
               <b>Firefox:</b> <code>about:debugging</code> → <b>This Firefox</b> → <b>Load Temporary Add-on</b> → select <code>manifest.json</code>. Click <b>Grant permission</b> when asked.

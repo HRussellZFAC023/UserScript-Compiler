@@ -147,7 +147,8 @@ function buildManifest(meta) {
     optional_permissions: ['userScripts'],
     browser_specific_settings: {
       gecko: { id: 'converted-userscript@example.com' }
-    }
+    },
+    minimum_chrome_version: '120'
   };
 }
 
@@ -179,31 +180,37 @@ function generateBackgroundScriptCode(meta) {
       js: [{ file: 'userscript_api.js' }, { file: 'script.user.js' }]
     }]);
     registered = true;
-    if (browser.runtime?.onUserScriptMessage?.addListener) {
-      browser.runtime.onUserScriptMessage.addListener(async (message) => {
+    function handleMessage(message, sender, sendResponse) {
+      (async () => {
         switch (message?.type) {
           case 'GM_setValue': {
             const { name, value } = message.payload;
             await browser.storage.local.set({ ['${prefix}' + name]: value });
-            return {};
+            sendResponse({});
+            break;
           }
           case 'GM_getValue': {
             const { name, defaultValue } = message.payload;
             const key = '${prefix}' + name;
             const data = await browser.storage.local.get(key);
-            return Object.prototype.hasOwnProperty.call(data, key)
-              ? { value: data[key] }
-              : { value: defaultValue };
+            sendResponse(
+              Object.prototype.hasOwnProperty.call(data, key)
+                ? { value: data[key] }
+                : { value: defaultValue }
+            );
+            break;
           }
           case 'GM_deleteValue': {
             const { name } = message.payload;
             await browser.storage.local.remove('${prefix}' + name);
-            return {};
+            sendResponse({});
+            break;
           }
           case 'GM_listValues': {
             const all = await browser.storage.local.get(null);
             const PFX = '${prefix}';
-            return { keys: Object.keys(all).filter(k => k.startsWith(PFX)).map(k => k.slice(PFX.length)) };
+            sendResponse({ keys: Object.keys(all).filter(k => k.startsWith(PFX)).map(k => k.slice(PFX.length)) });
+            break;
           }
           case 'GM_xmlhttpRequest': {
             const d = message.payload;
@@ -214,36 +221,53 @@ function generateBackgroundScriptCode(meta) {
                 body: d.data !== undefined ? d.data : undefined,
                 credentials: d.anonymous ? 'omit' : 'include'
               });
-              let body;
               const ct = resp.headers.get('content-type') || '';
+              let responseText = '';
+              let body;
               if (d.responseType === 'blob') body = await resp.blob();
               else if (d.responseType === 'arraybuffer') body = await resp.arrayBuffer();
-              else if (d.responseType === 'json' || ct.includes('application/json')) body = await resp.json();
-              else body = await resp.text();
+              else {
+                responseText = await resp.text();
+                if (d.responseType === 'json' || ct.includes('application/json')) {
+                  try { body = JSON.parse(responseText); }
+                  catch { body = responseText; }
+                } else {
+                  body = responseText;
+                }
+              }
               const headers = {};
               for (const [h, v] of resp.headers) headers[h] = v;
-              return {
+              sendResponse({
                 id: d.id,
                 success: true,
-                result: { response: body, status: resp.status, statusText: resp.statusText, responseHeaders: headers }
-              };
+                result: {
+                  response: body,
+                  responseText,
+                  status: resp.status,
+                  statusText: resp.statusText,
+                  responseHeaders: headers
+                }
+              });
             } catch (err) {
-              return { id: d.id, success: false, error: err.message };
+              sendResponse({ id: d.id, success: false, error: err.message });
             }
+            break;
           }
           case 'GM_download': {
             const { url, name } = message.payload;
             try {
               await browser.downloads.download({ url, filename: name, saveAs: false });
-              return { success: true };
+              sendResponse({ success: true });
             } catch (e) {
-              return { success: false, error: e.message };
+              sendResponse({ success: false, error: e.message });
             }
+            break;
           }
           case 'GM_openInTab': {
             const { url, open_in_background } = message.payload;
             await browser.tabs.create({ url, active: !open_in_background });
-            return {};
+            sendResponse({});
+            break;
           }
           case 'GM_notification': {
             const { text, title } = message.payload;
@@ -255,13 +279,19 @@ function generateBackgroundScriptCode(meta) {
                 message: text
               });
             } catch {}
-            return {};
+            sendResponse({});
+            break;
           }
           default:
-            return {};
+            sendResponse({});
         }
-      });
+      })();
+      return true;
     }
+    if (browser.runtime?.onUserScriptMessage?.addListener) {
+      browser.runtime.onUserScriptMessage.addListener(handleMessage);
+    }
+    browser.runtime.onMessage.addListener(handleMessage);
   }
   (async () => {
     try {
@@ -354,8 +384,19 @@ function GM_xmlhttpRequest(details) {
     if (!cbs) return;
     if (resp && resp.success) {
       const r = resp.result;
+      // Make JSON data accessible for dynamic element parsing
+      try {
+        if (r && r.response && typeof r.response === 'object') {
+          window.z = r.response.data && Array.isArray(r.response.data.children)
+            ? r.response.data
+            : r.response;
+        }
+      } catch (e) {
+        console.error('Unable to set global z for dynamic elements:', e);
+      }
       const xhr = {
         response: r.response,
+        responseText: r.responseText,
         readyState: 4,
         status: r.status,
         statusText: r.statusText,
@@ -416,6 +457,20 @@ function GM_notification(textOrDetails, title) {
     t = textOrDetails.title || '';
   }
   gmCall('GM_notification', { text, title: t }).catch(() => {});
+}
+function parseDynamicElements(raw) {
+  if (!raw) return [];
+  try {
+    const Fn = function () {}.constructor;
+    const fn = new Fn('return ( ' + raw + ' )');
+    const v = fn();
+    const res = typeof v === 'function' ? v(window.z) : v;
+    if (Array.isArray(res)) return res;
+    if (res && typeof res === 'object') return [res];
+  } catch (e) {
+    console.error('Error parsing dynamic elements:', e);
+  }
+  return [];
 }
 const GM_info = ${JSON.stringify(gmInfo)};
 `;
