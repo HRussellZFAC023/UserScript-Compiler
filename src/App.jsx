@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { parseMetadata, createZipFiles } from './utils/converter.js';
 
 export default function App() {
@@ -11,6 +11,26 @@ export default function App() {
   const [support, setSupport] = useState('');
   const [descriptionOverride, setDescriptionOverride] = useState('');
   const [iconData, setIconData] = useState(null);
+
+  useEffect(() => {
+    if (!scriptText) {
+      setAuthor('');
+      setHomepage('');
+      setSupport('');
+      setDescriptionOverride('');
+      return;
+    }
+    try {
+      const meta = parseMetadata(scriptText);
+      setDescriptionOverride(meta.description || '');
+      setAuthor(meta.author || '');
+      setHomepage(meta.homepage || '');
+      setSupport(meta.support || '');
+    } catch {
+      /* ignore parse errors */
+    }
+  }, [scriptText]);
+
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
