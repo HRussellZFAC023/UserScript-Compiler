@@ -6,6 +6,11 @@ export default function App() {
   const [error, setError] = useState('');
   const [zipBlob, setZipBlob] = useState(null);
   const [zipName, setZipName] = useState('userscript-extension.zip');
+  const [author, setAuthor] = useState('');
+  const [homepage, setHomepage] = useState('');
+  const [support, setSupport] = useState('');
+  const [descriptionOverride, setDescriptionOverride] = useState('');
+  const [iconData, setIconData] = useState(null);
 
   const handleFileUpload = (e) => {
     const file = e.target.files[0];
@@ -14,6 +19,19 @@ export default function App() {
     reader.onload = () => setScriptText(reader.result);
     reader.onerror = () => setError('Failed to read file.');
     reader.readAsText(file);
+  };
+
+  const handleIconUpload = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      const arrayBuffer = reader.result;
+      const ext = file.name.split('.').pop().toLowerCase();
+      setIconData({ data: new Uint8Array(arrayBuffer), ext });
+    };
+    reader.onerror = () => setError('Failed to read icon file.');
+    reader.readAsArrayBuffer(file);
   };
 
   const handleConvert = async () => {
@@ -25,7 +43,11 @@ export default function App() {
         throw new Error('Script metadata must include at least one @match or @include pattern, and a @name.');
       }
       setZipName(`${meta.name}-extension.zip`);
-      const zipFile = await createZipFiles(meta, scriptText);
+      if (descriptionOverride) meta.description = descriptionOverride;
+      if (author) meta.author = author;
+      if (homepage) meta.homepage = homepage;
+      if (support) meta.support = support;
+      const zipFile = await createZipFiles(meta, scriptText, iconData);
       setZipBlob(zipFile);
     } catch (e) {
       console.error('Conversion error:', e);
@@ -60,6 +82,56 @@ export default function App() {
         />
         <span className="ml-2 text-sm text-gray-600">Choose a <code>.user.js</code> file</span>
       </label>
+      <label className="block mb-2">
+        <span className="sr-only">Extension description</span>
+        <input
+          type="text"
+          value={descriptionOverride}
+          onChange={(e) => setDescriptionOverride(e.target.value)}
+          className="w-full border border-gray-300 rounded p-2 mb-2"
+          placeholder="Extension Description (optional)"
+        />
+      </label>
+      <label className="block mb-2">
+        <span className="sr-only">Author name/email</span>
+        <input
+          type="text"
+          value={author}
+          onChange={(e) => setAuthor(e.target.value)}
+          className="w-full border border-gray-300 rounded p-2 mb-2"
+          placeholder="Author name/email"
+        />
+      </label>
+      <label className="block mb-2">
+        <span className="sr-only">Homepage URL</span>
+        <input
+          type="url"
+          value={homepage}
+          onChange={(e) => setHomepage(e.target.value)}
+          className="w-full border border-gray-300 rounded p-2 mb-2"
+          placeholder="Homepage URL (optional)"
+        />
+      </label>
+      <label className="block mb-2">
+        <span className="sr-only">Support URL</span>
+        <input
+          type="url"
+          value={support}
+          onChange={(e) => setSupport(e.target.value)}
+          className="w-full border border-gray-300 rounded p-2 mb-2"
+          placeholder="Support URL (optional)"
+        />
+      </label>
+      <label className="block mb-2">
+        <span className="sr-only">Upload extension icon</span>
+        <input
+          type="file"
+          accept=".png,.ico,image/png,image/x-icon"
+          onChange={handleIconUpload}
+          className="file:mr-2 file:py-1 file:px-3 file:border-0 file:text-sm file:bg-gray-200 file:cursor-pointer"
+        />
+        <span className="ml-2 text-sm text-gray-600">Choose extension icon (PNG or ICO)</span>
+      </label>
 
       <button
         onClick={handleConvert}
@@ -83,6 +155,7 @@ export default function App() {
             <li>
               <b>Chrome:</b> <code>chrome://extensions</code> → enable <b>Developer mode</b> → <b>Load unpacked</b> → pick the unzipped folder. Open the extension’s <b>Details</b> and switch on <b>Allow User Scripts</b> (or enable the <code>#enable-extension-content-script-user-script</code> flag on older versions). The popup will open.
             </li>
+            <li><b>Tip:</b> If the userscript still doesn't activate, try restarting your browser to refresh permissions.</li>
             <li>
               <b>Firefox:</b> <code>about:debugging</code> → <b>This Firefox</b> → <b>Load Temporary Add-on</b> → select <code>manifest.json</code>. Click <b>Grant permission</b> when asked.
             </li>

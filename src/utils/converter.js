@@ -12,6 +12,9 @@ export function parseMetadata(scriptText) {
     connect: [],
     runAt: '',
     noFrames: false,
+    author: '',
+    homepage: '',
+    support: '',
   };
   const lines = scriptText.split(/\r?\n/);
   let inBlock = false;
@@ -60,6 +63,18 @@ export function parseMetadata(scriptText) {
         break;
       case 'noframes':
         meta.noFrames = true;
+        break;
+      case 'author':
+        meta.author = value;
+        break;
+      case 'homepage':
+      case 'homepageurl':
+      case 'website':
+      case 'source':
+        meta.homepage = value;
+        break;
+      case 'supporturl':
+        meta.support = value;
         break;
       default:
         break;
@@ -138,13 +153,20 @@ function buildManifest(meta) {
   return {
     manifest_version: 3,
     name: meta.name || 'Converted Userscript',
-    description: meta.description || '',
+    description:
+      (meta.description || '') +
+      ' — Made with ❤ using UserScript-Compiler by Henry Russell',
     version: meta.version || '1.0.0',
-    action: { default_title: 'Enable Userscript' },
+    author: meta.author || undefined,
+    homepage_url: meta.homepage || undefined,
+    support_url: meta.support || undefined,
+    icons: { "48": "icon-48.png", "128": "icon-128.png" },
+    action: { default_title: 'Enable Userscript', default_icon: { "48": "icon-48.png", "128": "icon-128.png" } },
     background: { scripts: ['background.js'], service_worker: 'background.js' },
     host_permissions: hostPerms,
     permissions,
     optional_permissions: ['userScripts'],
+    options_page: 'options.html',
     browser_specific_settings: {
       gecko: { id: 'converted-userscript@example.com' }
     },
@@ -157,8 +179,10 @@ function generateBackgroundScriptCode(meta) {
   const prefix = `userscript_${sanitizedName}_`;
   const scriptId = `us_${sanitizedName || 'script'}`;
 
-  return `(() => {
+  return `/* Made with ❤ using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
   const browser = globalThis.browser || globalThis.chrome;
+  browser.action?.setBadgeText({ text: '❤' });
+  browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
   let registered = false;
   async function registerIfPossible() {
     if (!browser?.userScripts) return;
@@ -180,6 +204,7 @@ function generateBackgroundScriptCode(meta) {
       js: [{ file: 'userscript_api.js' }, { file: 'script.user.js' }]
     }]);
     registered = true;
+    browser.action?.setBadgeText({ text: '' });
     function handleMessage(message, sender, sendResponse) {
       (async () => {
         switch (message?.type) {
@@ -299,6 +324,16 @@ function generateBackgroundScriptCode(meta) {
       if (has) await registerIfPossible();
     } catch {}
   })();
+  if (browser.runtime?.onInstalled) {
+    browser.runtime.onInstalled.addListener(async () => {
+      try {
+        const granted = await browser.permissions.request({ permissions: ['userScripts'] });
+        if (granted) await registerIfPossible();
+      } catch (e) {
+        console.error('Permission request error:', e);
+      }
+    });
+  }
   if (browser.action?.onClicked) {
     browser.action.onClicked.addListener(async () => {
       try {
@@ -476,16 +511,10 @@ const GM_info = ${JSON.stringify(gmInfo)};
 `;
 }
 
-export async function createZipFiles(meta, scriptText) {
+export async function createZipFiles(meta, scriptText, iconData) {
   const zip = new JSZip();
   const manifest = buildManifest(meta);
-  zip.file('manifest.json', JSON.stringify(manifest, null, 2));
-  const bgScript = generateBackgroundScriptCode(meta);
-  zip.file('background.js', bgScript);
-  const apiScript = generateUserScriptAPICode(meta);
-  zip.file('userscript_api.js', apiScript);
-  const userScriptCode = scriptText.replace(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
-  zip.file('script.user.js', userScriptCode);
+  // Default blank icon (1x1 transparent PNG) for fallback
   const emptyPng = new Uint8Array([
     137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,
     0,0,0,1,0,0,0,1,8,6,0,0,0,31,21,196,137,
@@ -493,7 +522,52 @@ export async function createZipFiles(meta, scriptText) {
     5,1,2,85,152,216,58,0,0,0,0,73,69,78,68,
     174,66,96,130
   ]);
-  zip.file('icon-48.png', emptyPng);
+  if (iconData) {
+    const { data, ext } = iconData;
+    if (ext === 'ico') {
+      manifest.icons = { "48": "icon-48.ico", "128": "icon-128.ico" };
+      manifest.action.default_icon = { "48": "icon-48.ico", "128": "icon-128.ico" };
+      zip.file('icon-48.ico', data);
+      zip.file('icon-128.ico', data);
+    } else {
+      manifest.icons = { "48": "icon-48.png", "128": "icon-128.png" };
+      manifest.action.default_icon = { "48": "icon-48.png", "128": "icon-128.png" };
+      zip.file('icon-48.png', data);
+      zip.file('icon-128.png', data);
+    }
+  } else {
+    manifest.icons = { "48": "icon-48.png", "128": "icon-128.png" };
+    manifest.action.default_icon = { "48": "icon-48.png", "128": "icon-128.png" };
+    zip.file('icon-48.png', emptyPng);
+    zip.file('icon-128.png', emptyPng);
+  }
+  manifest.options_page = 'options.html';
+  zip.file('manifest.json', JSON.stringify(manifest, null, 2));
+  const bgScript = generateBackgroundScriptCode(meta);
+  zip.file('background.js', bgScript);
+  const apiScript = generateUserScriptAPICode(meta);
+  zip.file('userscript_api.js', apiScript);
+  const userScriptCode = scriptText.replace(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
+  zip.file('script.user.js', userScriptCode);
+  const optionsHtml = `<!DOCTYPE html>
+<html><head><meta charset="UTF-8"><title>Extension Options</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
+  <h2>Setup Extension</h2>
+  <p>Click the button below to grant the <code>userScripts</code> permission:</p>
+  <button id="grant" style="padding:8px 16px;font-size:16px;">Grant Permissions</button>
+  <p id="status"></p>
+  <p style="margin-top:20px;font-size:12px;color:#555;">Made with ❤ using UserScript-Compiler by Henry Russell</p>
+  <script>
+    document.getElementById('grant').onclick = async () => {
+      try {
+        const granted = await chrome.permissions.request({ permissions: ['userScripts'] });
+        document.getElementById('status').textContent = granted ? 'Permission granted!' : 'Permission not granted.';
+      } catch (e) {
+        console.error(e);
+      }
+    };
+  </script>
+</body></html>`;
+  zip.file('options.html', optionsHtml);
   const content = await zip.generateAsync({ type: 'blob' });
   return content;
 }
