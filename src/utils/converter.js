@@ -167,9 +167,7 @@ function buildManifest(meta) {
     permissions,
     optional_permissions: ['userScripts'],
     options_page: 'options.html',
-    browser_specific_settings: {
-      gecko: { id: 'converted-userscript@example.com' }
-    },
+    browser_specific_settings: meta.uuid ? { gecko: { id: meta.uuid } } : undefined,
     minimum_chrome_version: '120'
   };
 }
@@ -181,8 +179,6 @@ function generateBackgroundScriptCode(meta) {
 
   return `/* Made with ❤ using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
   const browser = globalThis.browser || globalThis.chrome;
-  browser.action?.setBadgeText({ text: '❤' });
-  browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
   let registered = false;
   async function registerIfPossible() {
     if (!browser?.userScripts) return;
@@ -204,7 +200,6 @@ function generateBackgroundScriptCode(meta) {
       js: [{ file: 'userscript_api.js' }, { file: 'script.user.js' }]
     }]);
     registered = true;
-    browser.action?.setBadgeText({ text: '' });
     function handleMessage(message, sender, sendResponse) {
       (async () => {
         switch (message?.type) {
@@ -318,17 +313,26 @@ function generateBackgroundScriptCode(meta) {
     }
     browser.runtime.onMessage.addListener(handleMessage);
   }
-  (async () => {
+  async function updateBadgeAndRegister() {
     try {
       const has = await browser.permissions.contains({ permissions: ['userScripts'] });
-      if (has) await registerIfPossible();
-    } catch {}
-  })();
+      if (has) {
+        await registerIfPossible();
+        browser.action?.setBadgeText({ text: '' });
+      } else {
+        browser.action?.setBadgeText({ text: '❤' });
+        browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
+      }
+    } catch (e) {
+      console.warn('Permission check error:', e);
+    }
+  }
+  updateBadgeAndRegister();
   if (browser.runtime?.onInstalled) {
     browser.runtime.onInstalled.addListener(async () => {
       try {
         const granted = await browser.permissions.request({ permissions: ['userScripts'] });
-        if (granted) await registerIfPossible();
+        if (granted) await updateBadgeAndRegister();
       } catch (e) {
         console.error('Permission request error:', e);
       }
@@ -338,7 +342,7 @@ function generateBackgroundScriptCode(meta) {
     browser.action.onClicked.addListener(async () => {
       try {
         const granted = await browser.permissions.request({ permissions: ['userScripts'] });
-        if (granted) await registerIfPossible();
+        if (granted) await updateBadgeAndRegister();
       } catch (e) {
         console.error('Permission request error:', e);
       }
@@ -511,36 +515,65 @@ const GM_info = ${JSON.stringify(gmInfo)};
 `;
 }
 
+async function loadImageFromData(data, ext) {
+  const blob = new Blob([data], { type: ext === 'ico' ? 'image/x-icon' : 'image/png' });
+  const url = URL.createObjectURL(blob);
+  try {
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = url;
+    });
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+async function resizeIcon(img, size) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  ctx.drawImage(img, 0, 0, size, size);
+  const blob = await new Promise((resolve, reject) =>
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob failed'))), 'image/png')
+  );
+  const buf = await blob.arrayBuffer();
+  return new Uint8Array(buf);
+}
+
+async function generateIcons(iconData) {
+  const sizes = [48, 128];
+  const result = {};
+  if (iconData) {
+    try {
+      const img = await loadImageFromData(iconData.data, iconData.ext);
+      for (const s of sizes) {
+        result[s] = await resizeIcon(img, s);
+      }
+      return result;
+    } catch {
+      // fall through to blank icons
+    }
+  }
+  for (const s of sizes) {
+    const canvas = document.createElement('canvas');
+    canvas.width = canvas.height = s;
+    const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/png'));
+    const buf = await blob.arrayBuffer();
+    result[s] = new Uint8Array(buf);
+  }
+  return result;
+}
+
 export async function createZipFiles(meta, scriptText, iconData) {
   const zip = new JSZip();
   const manifest = buildManifest(meta);
-  // Default blank icon (1x1 transparent PNG) for fallback
-  const emptyPng = new Uint8Array([
-    137,80,78,71,13,10,26,10,0,0,0,13,73,72,68,82,
-    0,0,0,1,0,0,0,1,8,6,0,0,0,31,21,196,137,
-    0,0,0,10,73,68,65,84,120,156,99,248,15,0,1,
-    5,1,2,85,152,216,58,0,0,0,0,73,69,78,68,
-    174,66,96,130
-  ]);
-  if (iconData) {
-    const { data, ext } = iconData;
-    if (ext === 'ico') {
-      manifest.icons = { "48": "icon-48.ico", "128": "icon-128.ico" };
-      manifest.action.default_icon = { "48": "icon-48.ico", "128": "icon-128.ico" };
-      zip.file('icon-48.ico', data);
-      zip.file('icon-128.ico', data);
-    } else {
-      manifest.icons = { "48": "icon-48.png", "128": "icon-128.png" };
-      manifest.action.default_icon = { "48": "icon-48.png", "128": "icon-128.png" };
-      zip.file('icon-48.png', data);
-      zip.file('icon-128.png', data);
-    }
-  } else {
-    manifest.icons = { "48": "icon-48.png", "128": "icon-128.png" };
-    manifest.action.default_icon = { "48": "icon-48.png", "128": "icon-128.png" };
-    zip.file('icon-48.png', emptyPng);
-    zip.file('icon-128.png', emptyPng);
-  }
+  const iconFiles = await generateIcons(iconData);
+  manifest.icons = { "48": "icon-48.png", "128": "icon-128.png" };
+  manifest.action.default_icon = { "48": "icon-48.png", "128": "icon-128.png" };
+  zip.file('icon-48.png', iconFiles[48]);
+  zip.file('icon-128.png', iconFiles[128]);
   manifest.options_page = 'options.html';
   zip.file('manifest.json', JSON.stringify(manifest, null, 2));
   const bgScript = generateBackgroundScriptCode(meta);
