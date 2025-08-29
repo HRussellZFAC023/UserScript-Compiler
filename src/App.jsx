@@ -11,6 +11,7 @@ export default function App() {
   const [support, setSupport] = useState('');
   const [descriptionOverride, setDescriptionOverride] = useState('');
   const [iconData, setIconData] = useState(null);
+  const [uuid, setUuid] = useState('');
 
   useEffect(() => {
     if (!scriptText) {
@@ -67,6 +68,7 @@ export default function App() {
       if (author) meta.author = author;
       if (homepage) meta.homepage = homepage;
       if (support) meta.support = support;
+      if (uuid) meta.uuid = uuid;
       const zipFile = await createZipFiles(meta, scriptText, iconData);
       setZipBlob(zipFile);
     } catch (e) {
@@ -140,6 +142,16 @@ export default function App() {
           onChange={(e) => setSupport(e.target.value)}
           className="w-full border border-gray-300 rounded p-2 mb-2"
           placeholder="Support URL (optional)"
+        />
+      </label>
+      <label className="block mb-2">
+        <span className="sr-only">Extension UUID</span>
+        <input
+          type="text"
+          value={uuid}
+          onChange={(e) => setUuid(e.target.value)}
+          className="w-full border border-gray-300 rounded p-2 mb-2"
+          placeholder="Firefox Extension UUID (optional)"
         />
       </label>
       <label className="block mb-2">
