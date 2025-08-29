@@ -41,3 +41,7 @@ Pushes to `main` trigger the GitHub Actions workflow in `.github/workflows/deplo
 
 After these steps the userscript is registered and runs on matching pages using each browser’s native user‑script engine.
 
+## Feedback and Issues
+
+Have suggestions or found a bug? Please visit the [GitHub repository](https://github.com/HRussellZFAC023/UserScript-Compiler) to open issues or provide feedback.
+

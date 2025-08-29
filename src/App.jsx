@@ -189,6 +189,17 @@ export default function App() {
           </div>
         </div>
       )}
+
+      <p className="mt-8 text-center text-sm text-gray-600">
+        Feedback, suggestions, or issues? Visit the{' '}
+        <a
+          href="https://github.com/HRussellZFAC023/UserScript-Compiler"
+          className="text-blue-600 hover:underline"
+        >
+          GitHub repository
+        </a>
+        .
+      </p>
     </div>
   );
 }
