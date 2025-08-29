@@ -167,9 +167,7 @@ function buildManifest(meta) {
     permissions,
     optional_permissions: ['userScripts'],
     options_page: 'options.html',
-    browser_specific_settings: {
-      gecko: { id: 'converted-userscript@example.com' }
-    },
+    browser_specific_settings: meta.uuid ? { gecko: { id: meta.uuid } } : undefined,
     minimum_chrome_version: '120'
   };
 }
@@ -181,8 +179,6 @@ function generateBackgroundScriptCode(meta) {
 
   return `/* Made with ❤ using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
   const browser = globalThis.browser || globalThis.chrome;
-  browser.action?.setBadgeText({ text: '❤' });
-  browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
   let registered = false;
   async function registerIfPossible() {
     if (!browser?.userScripts) return;
@@ -204,7 +200,6 @@ function generateBackgroundScriptCode(meta) {
       js: [{ file: 'userscript_api.js' }, { file: 'script.user.js' }]
     }]);
     registered = true;
-    browser.action?.setBadgeText({ text: '' });
     function handleMessage(message, sender, sendResponse) {
       (async () => {
         switch (message?.type) {
@@ -318,17 +313,26 @@ function generateBackgroundScriptCode(meta) {
     }
     browser.runtime.onMessage.addListener(handleMessage);
   }
-  (async () => {
+  async function updateBadgeAndRegister() {
     try {
       const has = await browser.permissions.contains({ permissions: ['userScripts'] });
-      if (has) await registerIfPossible();
-    } catch {}
-  })();
+      if (has) {
+        await registerIfPossible();
+        browser.action?.setBadgeText({ text: '' });
+      } else {
+        browser.action?.setBadgeText({ text: '❤' });
+        browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
+      }
+    } catch (e) {
+      console.warn('Permission check error:', e);
+    }
+  }
+  updateBadgeAndRegister();
   if (browser.runtime?.onInstalled) {
     browser.runtime.onInstalled.addListener(async () => {
       try {
         const granted = await browser.permissions.request({ permissions: ['userScripts'] });
-        if (granted) await registerIfPossible();
+        if (granted) await updateBadgeAndRegister();
       } catch (e) {
         console.error('Permission request error:', e);
       }
@@ -338,7 +342,7 @@ function generateBackgroundScriptCode(meta) {
     browser.action.onClicked.addListener(async () => {
       try {
         const granted = await browser.permissions.request({ permissions: ['userScripts'] });
-        if (granted) await registerIfPossible();
+        if (granted) await updateBadgeAndRegister();
       } catch (e) {
         console.error('Permission request error:', e);
       }
