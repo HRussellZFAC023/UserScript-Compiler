@@ -43,5 +43,5 @@ After these steps the userscript is registered and runs on matching pages using 
 
 ## Feedback and Issues
 
-Have suggestions or found a bug? Please visit the [GitHub repository](https://github.com/HRussellZFAC023/UserScript-Compiler) to open issues or provide feedback.
+Have suggestions or found a bug? Please visit feel free to open issues or provide feedback.
 
