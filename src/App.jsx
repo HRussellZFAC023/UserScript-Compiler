@@ -212,6 +212,18 @@ export default function App() {
         </a>
         .
       </p>
+      <p className="mt-2 text-center text-sm text-gray-600">
+        If you find this tool helpful, you can{' '}
+        <a
+          href="https://www.paypal.com/paypalme/my/profile"
+          className="text-blue-600 hover:underline"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          support it on PayPal
+        </a>
+        .
+      </p>
     </div>
   );
 }
