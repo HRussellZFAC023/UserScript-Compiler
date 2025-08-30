@@ -45,3 +45,5 @@ After these steps the userscript is registered and runs on matching pages using 
 
 Have suggestions or found a bug? Please visit feel free to open issues or provide feedback.
 
+If you'd like to support the project, consider donating via [PayPal](https://www.paypal.com/paypalme/my/profile).
+
