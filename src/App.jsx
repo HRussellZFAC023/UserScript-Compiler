@@ -195,12 +195,12 @@ export default function App() {
           <div className="mt-4 bg-yellow-50 border-l-4 border-yellow-300 p-3 rounded flex items-start">
             <span className="mr-2 text-yellow-600 text-lg" aria-hidden="true">⚠️</span>
             <div>
-              <b>Note:</b> After loading the extension, <b>click the extension’s toolbar icon once</b> to grant <code>userScripts</code> permission and register the userscript.
-              <div className="text-gray-700 mt-1">This step is required for the userscript to activate.</div>
+                <b>Note:</b> After loading the extension, open the extension’s <b>Details</b> page in your browser and enable the <code>userScripts</code> permission to register the userscript.
+                <div className="text-gray-700 mt-1">This step is required for the userscript to activate.</div>
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       <p className="mt-8 text-center text-sm text-gray-600">
         Feedback, suggestions, or issues? Visit the{' '}

@@ -155,7 +155,7 @@ function buildManifest(meta) {
     name: meta.name || 'Converted Userscript',
     description:
       (meta.description || '') +
-      ' — Made with ❤ using UserScript-Compiler by Henry Russell',
+      ' — Made using UserScript-Compiler by Henry Russell',
     version: meta.version || '1.0.0',
     author: meta.author || undefined,
     homepage_url: meta.homepage || undefined,
@@ -177,7 +177,7 @@ function generateBackgroundScriptCode(meta) {
   const prefix = `userscript_${sanitizedName}_`;
   const scriptId = `us_${sanitizedName || 'script'}`;
 
-  return `/* Made with ❤ using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
+  return `/* Made using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
   const browser = globalThis.browser || globalThis.chrome;
   function hasUserScriptsPermission() {
     return new Promise((resolve) => {
@@ -190,23 +190,6 @@ function generateBackgroundScriptCode(meta) {
             .then(resolve, () => resolve(false));
         }
       } catch {
-        resolve(false);
-      }
-    });
-  }
-
-  function requestUserScriptsPermission() {
-    return new Promise((resolve) => {
-      try {
-        if (browser.permissions.request.length > 1) {
-          browser.permissions.request({ permissions: ['userScripts'] }, resolve);
-        } else {
-          browser.permissions
-            .request({ permissions: ['userScripts'] })
-            .then(resolve, () => resolve(false));
-        }
-      } catch (e) {
-        console.error('Permission request error:', e);
         resolve(false);
       }
     });
@@ -346,30 +329,20 @@ function generateBackgroundScriptCode(meta) {
     }
     browser.runtime.onMessage.addListener(handleMessage);
   }
-  async function updateBadgeAndRegister() {
+  async function updateRegistration() {
     try {
       const has = await hasUserScriptsPermission();
       if (has) {
         await registerIfPossible();
-        browser.action?.setBadgeText({ text: '' });
-      } else {
-        browser.action?.setBadgeText({ text: '❤' });
-        browser.action?.setBadgeBackgroundColor?.({ color: '#e0245e' });
       }
     } catch (e) {
       console.warn('Permission check error:', e);
     }
   }
-  updateBadgeAndRegister();
+  updateRegistration();
   if (browser.runtime?.onInstalled) {
     browser.runtime.onInstalled.addListener(() => {
       browser.runtime.openOptionsPage?.();
-    });
-  }
-  if (browser.action?.onClicked) {
-    browser.action.onClicked.addListener(async () => {
-      const granted = await requestUserScriptsPermission();
-      if (granted) await updateBadgeAndRegister();
     });
   }
 })();`;
@@ -609,32 +582,10 @@ export async function createZipFiles(meta, scriptText, iconData) {
   const optionsHtml = `<!DOCTYPE html>
 <html><head><meta charset="UTF-8"><title>Extension Options</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
   <h2>Setup Extension</h2>
-  <p>Click the button below to grant the <code>userScripts</code> permission:</p>
-  <button id="grant" style="padding:8px 16px;font-size:16px;">Grant Permissions</button>
-  <p id="status"></p>
-  <p style="margin-top:20px;font-size:12px;color:#555;">Made with ❤ using UserScript-Compiler by Henry Russell</p>
-  <script>
-    const browser = window.browser || window.chrome;
-    document.getElementById('grant').onclick = () => {
-      try {
-        if (browser.permissions.request.length > 1) {
-          browser.permissions.request({ permissions: ['userScripts'] }, (granted) => {
-            document.getElementById('status').textContent = granted ? 'Permission granted!' : 'Permission not granted.';
-          });
-        } else {
-          browser.permissions.request({ permissions: ['userScripts'] }).then((granted) => {
-            document.getElementById('status').textContent = granted ? 'Permission granted!' : 'Permission not granted.';
-          }, () => {
-            document.getElementById('status').textContent = 'Permission not granted.';
-          });
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    };
-  </script>
+  <p>To enable the <code>userScripts</code> permission, open the extension's details in your browser and allow it manually.</p>
+  <p style="margin-top:20px;font-size:12px;color:#555;">Made using UserScript-Compiler by Henry Russell</p>
 </body></html>`;
-zip.file('options.html', optionsHtml);
+  zip.file('options.html', optionsHtml);
   const content = await zip.generateAsync({ type: 'blob' });
   return content;
 }
