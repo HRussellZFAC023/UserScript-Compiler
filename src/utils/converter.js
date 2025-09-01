@@ -166,7 +166,7 @@ function buildManifest(meta) {
     host_permissions: hostPerms,
     permissions,
     optional_permissions: ['userScripts'],
-    options_page: 'options.html',
+    options_ui: { page: 'options.html', open_in_tab: true },
     browser_specific_settings: meta.uuid ? { gecko: { id: meta.uuid } } : undefined,
     minimum_chrome_version: '120'
   };
