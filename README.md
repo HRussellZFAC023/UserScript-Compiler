@@ -7,7 +7,7 @@ A web app that converts Tampermonkey/Greasemonkey userscripts into cross‑brows
 - Registers scripts with `chrome.userScripts.register` in a sandboxed world.
 - Generates a `manifest.json` with host permissions, `optional_permissions: ['userScripts']`, and a `minimum_chrome_version` of 120.
 - Provides a Greasemonkey API polyfill (`GM_*` functions, `unsafeWindow`, etc.) via `userscript_api.js`.
-- Supports dynamic code execution by configuring the user‑script world with a relaxed CSP (`script-src 'self' 'unsafe-eval'`).
+- Supports dynamic code execution by configuring the user‑script world with a relaxed CSP (`script-src 'self' 'unsafe-eval' blob:`).
 - Exposes the latest JSON response on `window.z` and includes a helper to safely evaluate dynamic element expressions.
 - Includes both `background.service_worker` and `background.scripts` entries for Chrome and Firefox compatibility.
 

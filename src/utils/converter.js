@@ -201,7 +201,7 @@ function generateBackgroundScriptCode(meta) {
     try {
       await browser.userScripts.configureWorld({
         messaging: true,
-        csp: "script-src 'self' 'unsafe-eval'"
+        csp: "script-src 'self' 'unsafe-eval' blob:"
       });
     } catch (e) {
       console.warn('configureWorld failed:', e);
