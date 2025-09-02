@@ -579,10 +579,16 @@ export async function createZipFiles(meta, scriptText, iconData) {
   zip.file('userscript_api.js', apiScript);
   const userScriptCode = scriptText.replace(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
   zip.file('script.user.js', userScriptCode);
+  const title = meta.name ? `${meta.name} Setup` : 'Extension Options';
+  const welcome = meta.name ? `Welcome to ${meta.name}!` : 'Setup Extension';
+  const desc = meta.description ? `<p>${meta.description}</p>` : '';
+  const author = meta.author ? `<p style="margin-top:20px;">Created by ${meta.author}</p>` : '';
   const optionsHtml = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Extension Options</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
-  <h2>Setup Extension</h2>
-  <p>To enable the <code>userScripts</code> permission, open the extension's details in your browser and allow it manually.</p>
+<html><head><meta charset="UTF-8"><title>${title}</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
+  <h2>${welcome}</h2>
+  ${desc}
+  <p>To finish setup, open the extension's details and enable the <code>userScripts</code> permission.</p>
+  ${author}
   <p style="margin-top:20px;font-size:12px;color:#555;">Made using UserScript-Compiler by Henry Russell</p>
 </body></html>`;
   zip.file('options.html', optionsHtml);
