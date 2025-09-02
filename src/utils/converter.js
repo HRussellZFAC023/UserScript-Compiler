@@ -579,10 +579,32 @@ export async function createZipFiles(meta, scriptText, iconData) {
   zip.file('userscript_api.js', apiScript);
   const userScriptCode = scriptText.replace(/\/\/ ==UserScript==[\s\S]*?\/\/ ==\/UserScript==/, '').trim();
   zip.file('script.user.js', userScriptCode);
+  const esc = (s = '') =>
+    s.replace(/[&<>"']/g, (c) => {
+      switch (c) {
+        case '&':
+          return '&amp;';
+        case '<':
+          return '&lt;';
+        case '>':
+          return '&gt;';
+        case '"':
+          return '&quot;';
+        default:
+          return '&#39;';
+      }
+    });
+  const name = esc(meta.name || 'Extension');
+  const desc = esc(meta.description || '');
+  const author = esc(meta.author || '');
   const optionsHtml = `<!DOCTYPE html>
-<html><head><meta charset="UTF-8"><title>Extension Options</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
-  <h2>Setup Extension</h2>
-  <p>To enable the <code>userScripts</code> permission, open the extension's details in your browser and allow it manually.</p>
+<html>
+<head><meta charset="UTF-8"><title>${name} Setup</title></head>
+<body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
+  <h2>Welcome to ${name}!</h2>
+  ${desc ? `<p>${desc}</p>` : ''}
+  ${author ? `<p>Created by ${author}</p>` : ''}
+  <p>To get started, open the extension's details in your browser and enable the <code>userScripts</code> permission.</p>
   <p style="margin-top:20px;font-size:12px;color:#555;">Made using UserScript-Compiler by Henry Russell</p>
 </body></html>`;
   zip.file('options.html', optionsHtml);
