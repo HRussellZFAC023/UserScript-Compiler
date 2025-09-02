@@ -37,7 +37,7 @@ Pushes to `main` trigger the GitHub Actions workflow in `.github/workflows/deplo
 1. Build or convert a userscript through the web UI to obtain a ZIP archive.
 2. Extract the ZIP and load it as an unpacked extension.
    - **Chrome:** visit `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted folder. Open the extension’s **Details** page and enable **Allow User Scripts** (or enable the `#enable-extension-content-script-user-script` flag on older versions).
-   - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `manifest.json`. Grant the requested permission when prompted.
+   - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `manifest.json`. Grant the requested permission when prompted. If you enable the permission later from the add-on's details page, the extension will now detect the change and register automatically without requiring a manual reload.
 
 After these steps the userscript is registered and runs on matching pages using each browser’s native user‑script engine.
 
