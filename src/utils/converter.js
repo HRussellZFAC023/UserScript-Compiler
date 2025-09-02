@@ -365,6 +365,18 @@ function generateBackgroundScriptCode(meta) {
       }
     });
   }
+  if (browser.action?.onClicked) {
+    browser.action.onClicked.addListener(async () => {
+      try {
+        const granted = await browser.permissions.request({ permissions: ['userScripts'] });
+        if (granted) {
+          await updateRegistration();
+        }
+      } catch (e) {
+        console.error('Permission request failed:', e);
+      }
+    });
+  }
 })();`;
 }
 
@@ -607,7 +619,7 @@ export async function createZipFiles(meta, scriptText, iconData) {
 <html><head><meta charset="UTF-8"><title>${title}</title></head><body style="font-family:sans-serif;padding:20px;text-align:center;background:#f9fafb;">
   <h2>${welcome}</h2>
   ${desc}
-  <p>To finish setup, open the extension's details and enable the <code>userScripts</code> permission.</p>
+  <p>Click the extension's toolbar icon to grant the <code>userScripts</code> permission, or open the extension's details page and enable it.</p>
   ${author}
   <p style="margin-top:20px;font-size:12px;color:#555;">Made using UserScript-Compiler by Henry Russell</p>
 </body></html>`;
