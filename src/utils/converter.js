@@ -87,6 +87,20 @@ export function parseMetadata(scriptText) {
   return meta;
 }
 
+function normalizeGlobs(globs) {
+  return globs.map((glob) => {
+    let pat = glob
+      .replace(/^https?:\/\//, '*://')
+      .replace(/^http\\*:\/\//, '*://');
+    if (!pat.includes('://')) pat = '*://' + pat;
+    if (!pat.endsWith('*')) {
+      if (!pat.endsWith('/')) pat += '/';
+      pat += '*';
+    }
+    return pat;
+  });
+}
+
 function buildManifest(meta) {
   const permissions = [];
   let hostPerms = [];
@@ -99,15 +113,8 @@ function buildManifest(meta) {
     }
   });
 
-  meta.includes.forEach((glob) => {
-    let pat = glob.replace(/^http\*: /, '*:');
-    if (!pat.includes('://')) pat = '*://' + pat;
-    if (!pat.endsWith('*')) {
-      if (!pat.endsWith('/')) pat += '/';
-      pat += '*';
-    }
-    hostPerms.push(pat);
-  });
+  const includeHosts = normalizeGlobs(meta.includes);
+  includeHosts.forEach((p) => hostPerms.push(p));
 
   meta.connect.forEach((domain) => {
     if (!domain) return;
@@ -115,7 +122,7 @@ function buildManifest(meta) {
       hostPerms.push('*://*/*');
     } else if (domain === 'self') {
       meta.matches.forEach((p) => hostPerms.push(p));
-      meta.includes.forEach((p) => hostPerms.push(p));
+      includeHosts.forEach((p) => hostPerms.push(p));
     } else {
       hostPerms.push('*://' + domain + '/*');
       if (!domain.startsWith('*.')) {
@@ -176,6 +183,8 @@ function generateBackgroundScriptCode(meta) {
   const sanitizedName = meta.name ? meta.name.replace(/\W+/g, '_') : 'script';
   const prefix = `userscript_${sanitizedName}_`;
   const scriptId = `us_${sanitizedName || 'script'}`;
+  const includePatterns = normalizeGlobs(meta.includes);
+  const excludePatterns = normalizeGlobs(meta.excludes);
 
   return `/* Made using UserScript-Compiler by Henry Russell: https://hrussellzfac023.github.io/UserScript-Compiler/ */(() => {
   const browser = globalThis.browser || globalThis.chrome;
@@ -209,8 +218,8 @@ function generateBackgroundScriptCode(meta) {
     if (registered) return;
     await browser.userScripts.register([{
       id: ${JSON.stringify(scriptId)},
-      matches: ${JSON.stringify(meta.matches)},
-      excludeMatches: ${JSON.stringify(meta.excludes)},
+      matches: ${JSON.stringify(meta.matches.concat(includePatterns))},
+      excludeMatches: ${JSON.stringify(excludePatterns)},
       allFrames: ${!meta.noFrames},
       runAt: ${JSON.stringify(meta.runAt || 'document_idle')},
       js: [{ file: 'userscript_api.js' }, { file: 'script.user.js' }]
