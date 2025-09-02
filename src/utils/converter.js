@@ -349,6 +349,13 @@ function generateBackgroundScriptCode(meta) {
       browser.runtime.openOptionsPage?.();
     });
   }
+  if (browser.permissions?.onAdded) {
+    browser.permissions.onAdded.addListener((perms) => {
+      if (perms.permissions?.includes('userScripts')) {
+        updateRegistration();
+      }
+    });
+  }
 })();`;
 }
 
