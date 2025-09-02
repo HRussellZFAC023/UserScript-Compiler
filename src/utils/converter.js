@@ -340,8 +340,12 @@ function generateBackgroundScriptCode(meta) {
     }
   }
   updateRegistration();
+  if (browser.runtime?.onStartup) {
+    browser.runtime.onStartup.addListener(updateRegistration);
+  }
   if (browser.runtime?.onInstalled) {
     browser.runtime.onInstalled.addListener(() => {
+      updateRegistration();
       browser.runtime.openOptionsPage?.();
     });
   }
