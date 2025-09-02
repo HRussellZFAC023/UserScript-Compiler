@@ -345,6 +345,7 @@ function generateBackgroundScriptCode(meta) {
   }
   if (browser.runtime?.onInstalled) {
     browser.runtime.onInstalled.addListener(() => {
+      updateRegistration();
       browser.runtime.openOptionsPage?.();
     });
   }
