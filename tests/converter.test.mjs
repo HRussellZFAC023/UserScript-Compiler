@@ -41,6 +41,17 @@ test('default compiler avoids native userScripts permission', () => {
   assert.deepEqual(firefox.manifest.browser_specific_settings.gecko.data_collection_permissions.required, ['websiteContent']);
 });
 
+test('compiler warns when source userscript looks minified for Greasy Fork', async () => {
+  const minifiedBody = `var a=1;${'a++;'.repeat(700)}`;
+  const minifiedScript = fixture.replace("console.log('loaded');", minifiedBody);
+  const analysis = analyzeUserscript(minifiedScript);
+  assert.ok(analysis.diagnostics.some(diagnostic => diagnostic.code === 'greasyfork.source-readability'));
+
+  const result = await compileUserscriptProject(minifiedScript, { outputType: 'uint8array' });
+  const readme = result.files.find(file => file.path === 'packages/userscript/README.md')?.content || '';
+  assert.match(readme, /Rebuild with minification disabled before submitting to Greasy Fork/i);
+});
+
 test('native userScripts mode emits target-specific permission placement', () => {
   const analysis = analyzeUserscript(fixture, { targets: ['chrome', 'firefox'], runtimeMode: 'user-scripts' });
   const chrome = analysis.targetPlans.find(plan => plan.target === 'chrome');

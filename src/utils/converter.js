@@ -43,6 +43,11 @@ const DEFAULT_OPTIONS = {
   projectPackage: true,
 };
 
+const MINIFIED_SOURCE_MIN_SIZE = 2_000;
+const MINIFIED_SOURCE_LINE_LIMIT = 5;
+const MINIFIED_SOURCE_LONG_LINE = 2_000;
+const MINIFIED_SOURCE_AVERAGE_LINE = 500;
+
 export function parseMetadata(scriptText) {
   const meta = {
     name: '',
@@ -194,8 +199,15 @@ export function analyzeUserscript(scriptText, options = {}) {
   const compileOptions = normalizeOptions(options);
   const meta = applyMetadataOverrides(parseMetadata(scriptText), compileOptions.metadataOverrides);
   const diagnostics = [];
+  const readability = analyzeSourceReadability(scriptText);
 
   if (!meta.name) diagnostics.push(errorDiagnostic('metadata.name', 'Missing @name. The extension will be named "Converted Userscript".'));
+  if (readability.looksMinified) {
+    diagnostics.push(warnDiagnostic(
+      'greasyfork.source-readability',
+      `The source userscript looks minified or packed (${readability.lineCount} body line(s), longest line ${readability.longestLine} chars). Greasy Fork requires posted scripts to remain readable and non-minified.`,
+    ));
+  }
   if (!meta.matches.length && !meta.includes.length) {
     diagnostics.push(errorDiagnostic('metadata.match', 'Missing @match or @include. Browser extensions need explicit URL patterns.'));
   }
@@ -1950,6 +1962,19 @@ function stripTerminalPunctuation(value) {
   return String(value || '').trim().replace(/[.!?]+$/u, '') || 'the packaged userscript behavior';
 }
 
+function analyzeSourceReadability(scriptText) {
+  const body = stripMetadata(scriptText);
+  const bodyLines = body.split(/\r?\n/).filter(line => line.trim() && !line.trim().startsWith('//'));
+  const lineCount = bodyLines.length;
+  const longestLine = bodyLines.reduce((max, line) => Math.max(max, line.length), 0);
+  const averageLine = lineCount ? Math.round(body.length / lineCount) : 0;
+  const looksMinified = body.length >= MINIFIED_SOURCE_MIN_SIZE
+    && (lineCount <= MINIFIED_SOURCE_LINE_LIMIT
+      || longestLine >= MINIFIED_SOURCE_LONG_LINE
+      || averageLine >= MINIFIED_SOURCE_AVERAGE_LINE);
+  return { looksMinified, lineCount, longestLine, averageLine };
+}
+
 function firefoxAndroidFocusAreas(meta, grants) {
   const areas = [];
   if (hasBroadHostAccess(meta)) areas.push('all-site host access');
@@ -1969,6 +1994,12 @@ function hasBroadHostAccess(meta) {
 
 function generateTroubleshooting(meta, diagnostics) {
   return `# Review and Runtime Troubleshooting
+
+## Greasy Fork
+
+- **Minified or packed source:** Greasy Fork requires posted userscript code to be readable and non-minified. Build with minification disabled, keep variable names and whitespace, and move large data files to \`@resource\`, user import, or hosted JSON when the platform allows it.
+- **Near the 2 MB limit:** do not minify to fit. Remove duplicate code, split optional data, or use reviewable external resources that match Greasy Fork's rules.
+- **External JavaScript:** \`@require\` may be allowed only for accepted libraries/URLs. Do not use \`@require\` as a way to hide the main script body elsewhere.
 
 ## Chrome Review
 
@@ -2110,11 +2141,18 @@ For store submission guidance, see the generated files in \`../../review/\` from
 }
 
 function generateUserscriptReadme(analysis) {
+  const hasReadabilityWarning = analysis.diagnostics.some(diagnostic => diagnostic.code === 'greasyfork.source-readability');
   return `# Userscript Artifact
 
 Install \`script.user.js\` in Tampermonkey, Violentmonkey, or another userscript manager.
 
 The compiler does not alter this artifact. Extension and standalone packages live beside it in the generated project.
+
+## Greasy Fork Readiness
+
+Greasy Fork requires the uploaded userscript to stay readable and non-minified. This compiler preserves your source exactly, so fix minification in your source build before publishing here.
+
+${hasReadabilityWarning ? 'Warning: the compiler detected a minified-looking source body. Rebuild with minification disabled before submitting to Greasy Fork.' : 'No minified-looking source body was detected by the compiler heuristic.'}
 `;
 }
 

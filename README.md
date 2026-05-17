@@ -86,6 +86,10 @@ The `*-extension-project.zip` file is a source/audit bundle. Store uploads shoul
 
 Run `npm run verify` from the generated output directory to check required files, package validation errors, and release artifact presence.
 
+## Greasy Fork Readability
+
+The userscript package is copied exactly from your input file. The compiler does not minify, obfuscate, or rewrite it. Greasy Fork rejects posted scripts that are minified or packed, so build your `.user.js` with JavaScript and CSS minification disabled before compiling or publishing. If the source body looks minified, the compiler emits a `greasyfork.source-readability` warning and the generated userscript README explains what to fix.
+
 ## Review Guidance Sources
 
 - Chrome privacy fields and permission justifications: https://developer.chrome.com/docs/webstore/cws-dashboard-privacy
