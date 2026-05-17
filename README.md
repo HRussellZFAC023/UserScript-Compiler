@@ -1,49 +1,115 @@
-# Userscript Converter
+# UserScript Compiler 2.0
 
-A web app that converts Tampermonkey/Greasemonkey userscripts into cross‑browser Manifest V3 extensions. The generated ZIP can be loaded in Chrome or Firefox and uses the native [userScripts API](https://developer.chrome.com/docs/extensions/reference/api/userScripts) to inject the userscript.
+Compile one `.user.js` file into three reviewable packages:
 
-## Features
+- a userscript artifact for Tampermonkey, Violentmonkey, Greasemonkey, or Safari userscript apps
+- browser-extension packages for Chrome, Firefox, and Safari
+- a standalone web harness for baseline testing
 
-- Registers scripts with `chrome.userScripts.register` in a sandboxed world.
-- Generates a `manifest.json` with host permissions, `optional_permissions: ['userScripts']`, and a `minimum_chrome_version` of 120.
-- Provides a Greasemonkey API polyfill (`GM_*` functions, `unsafeWindow`, etc.) via `userscript_api.js`.
-- Supports dynamic code execution by configuring the user‑script world with a relaxed CSP (`script-src 'self' 'unsafe-eval' blob:`).
-- Exposes the latest JSON response on `window.z` and includes a helper to safely evaluate dynamic element expressions.
-- Includes both `background.service_worker` and `background.scripts` entries for Chrome and Firefox compatibility.
+The compiler also generates `review/` templates for Chrome Web Store, Mozilla Add-ons, Safari/App Store review notes, Firefox for Android notes, and troubleshooting.
+When run through the CLI it also writes store-ready release artifacts separately from the project/audit bundle.
 
-## Development
+## Why 2.0 Exists
+
+The original compiler always used the native `userScripts` API. That is high-friction for review and installation:
+
+- Chrome requires the `userScripts` permission plus a browser toggle.
+- Mozilla policy allows the `userScripts` API only for user-script managers.
+- Safari does not have the same cross-browser `userScripts` API path.
+
+2.0 defaults to static content-script packaging and only uses native `userScripts` mode when you explicitly choose it.
+
+## Web App
 
 ```bash
-npm install
+npm ci
 npm run dev
 ```
 
-## Build
+Build the GitHub Pages site:
 
 ```bash
 npm run build
 ```
 
-The built files are output to `dist/`.
+Run the local checks:
 
-## Deployment
+```bash
+npm run check
+```
 
-Pushes to `main` trigger the GitHub Actions workflow in `.github/workflows/deploy.yml` which builds and publishes the site to GitHub Pages.
+## CLI
 
-[![Deploy to GitHub Pages](https://github.com/HRussellZFAC023/UserScript-Compiler/actions/workflows/deploy.yml/badge.svg)](https://github.com/HRussellZFAC023/UserScript-Compiler/actions/workflows/deploy.yml)
+```bash
+npm run compile -- path/to/script.user.js --out ./compiled-script
+```
 
-## Using the generated extension
+Useful options:
 
-1. Build or convert a userscript through the web UI to obtain a ZIP archive.
-2. Extract the ZIP and load it as an unpacked extension.
-   - **Chrome:** visit `chrome://extensions`, enable **Developer mode**, choose **Load unpacked**, and select the extracted folder. Open the extension’s **Details** page and enable **Allow User Scripts** (or enable the `#enable-extension-content-script-user-script` flag on older versions).
-   - **Firefox:** open `about:debugging`, choose **This Firefox**, click **Load Temporary Add-on**, and select `manifest.json`. Grant the requested permission when prompted. If you enable the permission later from the add-on's details page, the extension will now detect the change and register automatically without requiring a manual reload.
+```bash
+npm run compile -- ./dist/yomu.user.js \
+  --out ./compiled-yomu \
+  --target chrome,firefox,safari \
+  --runtime content-script \
+  --newtab-dir ./dist/newtab
+```
 
-After these steps the userscript is registered and runs on matching pages using each browser’s native user‑script engine.
+Runtime modes:
 
-## Feedback and Issues
+- `content-script`: default, avoids the native `userScripts` permission.
+- `user-scripts`: advanced mode using Chrome/Firefox `userScripts`.
+- `auto`: compiler chooses per target.
 
-Have suggestions or found a bug? Please visit feel free to open issues or provide feedback.
+Use `--newtab` for a generated placeholder new-tab page, or `--newtab-dir ./dist/newtab` to package a real built new-tab app such as Yomu's.
 
-If you'd like to support the project, consider donating via [PayPal](https://www.paypal.com/paypalme/my/profile).
+## Generated Project Layout
 
+```text
+packages/
+  userscript/script.user.js
+  extension/chrome/
+  extension/firefox/
+  extension/safari/
+  standalone/
+review/
+audit/
+release/
+  chrome/*.zip
+  firefox/*.xpi
+  safari/*-safari-web-extension/
+tools/verify.mjs
+```
+
+Load `packages/extension/chrome` unpacked in Chrome, `packages/extension/firefox` in Firefox, and package `packages/extension/safari` through Apple's Safari Web Extension tooling.
+
+The `*-extension-project.zip` file is a source/audit bundle. Store uploads should use the target-specific files under `release/`, where Chrome and Firefox archives have `manifest.json` at the archive root and Safari output is a WebExtension source folder for Apple's packager.
+
+Run `npm run verify` from the generated output directory to check required files, package validation errors, and release artifact presence.
+
+## Review Guidance Sources
+
+- Chrome privacy fields and permission justifications: https://developer.chrome.com/docs/webstore/cws-dashboard-privacy
+- Chrome `userScripts`: https://developer.chrome.com/docs/extensions/reference/api/userScripts
+- Chrome single-purpose FAQ: https://developer.chrome.com/docs/webstore/program-policies/quality-guidelines-faq
+- Mozilla Add-on Policies: https://extensionworkshop.com/documentation/publish/add-on-policies/
+- Mozilla source submission: https://extensionworkshop.com/documentation/publish/source-code-submission/
+- Safari Web Extensions: https://developer.apple.com/documentation/SafariServices/safari-web-extensions
+- Safari permissions: https://developer.apple.com/documentation/safariservices/managing-safari-web-extension-permissions
+
+## Yomu Example
+
+Build Yomu first, then compile it:
+
+```bash
+cd ../yomu-reader
+npm ci
+npm run build
+npm run verify
+
+cd ../UserScript-Compiler
+npm ci
+npm run compile -- ../yomu-reader/dist/yomu.user.js --out ./compiled-yomu --target chrome,firefox,safari --runtime content-script --newtab-dir ../yomu-reader/dist/newtab
+node ./compiled-yomu/tools/verify.mjs
+```
+
+Use the generated `review/` files as the starting point for Chrome, Mozilla, and Safari submissions. Read them before pasting: they are generated from metadata and should stay truthful to the final package.
