@@ -83,14 +83,14 @@ export default function App() {
 
   return (
     <main className="min-h-screen bg-slate-50 text-slate-950">
-      <div className="mx-auto flex w-full max-w-7xl flex-col gap-4 px-4 py-5">
+      <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5">
         <header className="border-b border-slate-200 pb-4">
           <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">UserScript Compiler 2.0</p>
           <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
             <div>
               <h1 className="text-3xl font-semibold">Compile one script into three packages</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Generate a userscript artifact, browser-extension packages, a standalone test harness, and review-ready store notes from the same source.
+                Generate a userscript artifact, browser-extension packages, a standalone test harness, and one review-ready submission guide from the same source.
               </p>
             </div>
             <div className="flex gap-2 text-sm">
@@ -101,20 +101,25 @@ export default function App() {
         </header>
 
         <nav className="flex flex-wrap gap-2" aria-label="Compiler sections">
-          {['compile', 'audit', 'review', 'cli'].map(tab => (
+          {[
+            ['compile', 'Compile'],
+            ['audit', 'Audit'],
+            ['review', 'Submission Guide'],
+            ['cli', 'CLI'],
+          ].map(([tab, label]) => (
             <button
               key={tab}
               type="button"
               onClick={() => setActiveTab(tab)}
-              className={`rounded border px-4 py-2 text-sm font-semibold ${activeTab === tab ? 'border-blue-700 bg-blue-700 text-white' : 'border-slate-300 bg-white text-slate-800'}`}
+              className={`rounded border px-3 py-2 text-sm font-semibold ${activeTab === tab ? 'border-blue-700 bg-blue-700 text-white' : 'border-slate-300 bg-white text-slate-800'}`}
             >
-              {tab[0].toUpperCase() + tab.slice(1)}
+              {label}
             </button>
           ))}
         </nav>
 
         {activeTab === 'compile' && (
-          <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+          <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="flex min-h-[540px] flex-col">
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <label className="inline-flex cursor-pointer items-center rounded border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">
@@ -135,8 +140,9 @@ export default function App() {
 
             <aside className="flex flex-col gap-4">
               <section className="rounded border border-slate-300 bg-white p-4">
-                <h2 className="text-base font-semibold">Runtime</h2>
-                <div className="mt-3 grid gap-2">
+                <h2 className="text-base font-semibold">Package Settings</h2>
+                <h3 className="mt-4 text-xs font-semibold uppercase text-slate-500">Runtime</h3>
+                <div className="mt-2 grid gap-2">
                   {[
                     ['content-script', 'Default: avoids native userScripts review friction.'],
                     ['user-scripts', 'Advanced: uses browser userScripts API.'],
@@ -148,11 +154,9 @@ export default function App() {
                     </label>
                   ))}
                 </div>
-              </section>
 
-              <section className="rounded border border-slate-300 bg-white p-4">
-                <h2 className="text-base font-semibold">Targets</h2>
-                <div className="mt-3 grid gap-2">
+                <h3 className="mt-5 text-xs font-semibold uppercase text-slate-500">Targets</h3>
+                <div className="mt-2 grid grid-cols-3 gap-2">
                   {['chrome', 'firefox', 'safari'].map(target => (
                     <label key={target} className="flex items-center gap-2 text-sm">
                       <input type="checkbox" checked={targets.includes(target)} onChange={() => toggleTarget(target)} />
@@ -160,11 +164,9 @@ export default function App() {
                     </label>
                   ))}
                 </div>
-              </section>
 
-              <section className="rounded border border-slate-300 bg-white p-4">
-                <h2 className="text-base font-semibold">Native Features</h2>
-                <label className="mt-3 flex items-center gap-2 text-sm">
+                <h3 className="mt-5 text-xs font-semibold uppercase text-slate-500">Native Features</h3>
+                <label className="mt-2 flex items-center gap-2 text-sm">
                   <input type="checkbox" checked={includeNewTab} onChange={event => setIncludeNewTab(event.target.checked)} />
                   Package a local new-tab override
                 </label>
@@ -252,21 +254,21 @@ function AuditView({ analysis }) {
 }
 
 function ReviewView({ analysis }) {
-  if (!analysis) return <EmptyState text="Paste a userscript to generate review templates." />;
+  if (!analysis) return <EmptyState text="Paste a userscript to generate the submission guide." />;
   const review = analysis.review;
+  const generatedGuide = analysis.files?.find(file => file.path === 'review/submission-guide.md')?.content;
+  const fallbackGuide = [
+    '# Submission and Review Guide',
+    review.chrome,
+    review.mozilla,
+    review.safari,
+    review.firefoxAndroid,
+    review.troubleshooting,
+  ].join('\n\n');
   return (
-    <section className="grid gap-4 lg:grid-cols-2">
-      {[
-        ['Chrome', review.chrome],
-        ['Mozilla', review.mozilla],
-        ['Safari', review.safari],
-        ['Troubleshooting', review.troubleshooting],
-      ].map(([label, content]) => (
-        <article key={label} className="rounded border border-slate-300 bg-white p-4">
-          <h2 className="text-lg font-semibold">{label}</h2>
-          <textarea className="mt-3 h-96 w-full rounded border border-slate-300 p-3 font-mono text-xs leading-5" readOnly value={content} />
-        </article>
-      ))}
+    <section className="rounded border border-slate-300 bg-white p-4">
+      <h2 className="text-lg font-semibold">Submission Guide</h2>
+      <textarea className="mt-3 h-[640px] w-full rounded border border-slate-300 p-3 font-mono text-xs leading-5" readOnly value={generatedGuide || fallbackGuide} />
     </section>
   );
 }
@@ -277,12 +279,12 @@ function CliView({ runtimeMode, targets, includeNewTab }) {
     <section className="rounded border border-slate-300 bg-white p-5">
       <h2 className="text-lg font-semibold">CLI Automation</h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">
-        The web app and CLI use the same compiler core. Use the CLI in CI to generate extension packages, review templates, and audit JSON from a built userscript.
+        The web app and CLI use the same compiler core. Use the CLI in CI to generate extension packages, a submission guide, and audit JSON from a built userscript.
       </p>
       <pre className="mt-4 overflow-auto rounded bg-slate-950 p-4 text-sm text-slate-100">{command}</pre>
       <div className="mt-5 grid gap-3 text-sm md:grid-cols-3">
         <div className="rounded border border-slate-200 p-3"><strong>1. Build</strong><br />Run your userscript build first.</div>
-        <div className="rounded border border-slate-200 p-3"><strong>2. Compile</strong><br />Generate extension, standalone, and review packages.</div>
+        <div className="rounded border border-slate-200 p-3"><strong>2. Compile</strong><br />Generate extension, standalone, and submission packages.</div>
         <div className="rounded border border-slate-200 p-3"><strong>3. Verify</strong><br />Run the generated project verifier and browser QA.</div>
       </div>
     </section>

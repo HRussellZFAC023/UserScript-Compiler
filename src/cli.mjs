@@ -33,7 +33,6 @@ const result = await compileUserscriptProject(scriptText, {
   newTabPath: flags.newtabDir ? 'newtab/index.html' : 'newtab.html',
   newTabFiles,
   includeContextMenus: flags.contextMenus !== false,
-  includeOptionsPage: flags.optionsPage !== false,
   outputType: 'nodebuffer',
   firefoxId: flags.firefoxId,
 });
@@ -94,7 +93,6 @@ function parseFlags(values) {
       continue;
     }
     if (key === 'no-options-page') {
-      parsed.optionsPage = false;
       continue;
     }
     parsed[toCamel(key)] = values[i + 1];
@@ -164,6 +162,5 @@ Options:
   --firefox-id <id>        Firefox extension id for browser_specific_settings
   --zip-only               Skip exploded project files; still writes project and release artifacts
   --no-context-menus       Disable generated context-menu support
-  --no-options-page        Disable generated options page
 `);
 }

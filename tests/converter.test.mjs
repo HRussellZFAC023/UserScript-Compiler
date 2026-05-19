@@ -70,35 +70,46 @@ test('menu permissions are only requested for scripts with menu commands', () =>
   assert.ok(!firefox.manifest.permissions.includes('menus'));
 });
 
-test('compileUserscriptProject emits three package families and review templates', async () => {
+test('compileUserscriptProject emits three package families and one submission guide', async () => {
   const result = await compileUserscriptProject(fixture, { outputType: 'uint8array' });
   const paths = new Set(result.files.map(file => file.path));
   assert.ok(paths.has('packages/userscript/script.user.js'));
   assert.ok(paths.has('packages/extension/chrome/manifest.json'));
   assert.ok(paths.has('packages/extension/firefox/manifest.json'));
   assert.ok(paths.has('packages/extension/safari/manifest.json'));
+  assert.ok(paths.has('packages/extension/chrome/popup.html'));
+  assert.ok(paths.has('packages/extension/chrome/popup.js'));
+  assert.ok(paths.has('packages/extension/chrome/popup.css'));
+  assert.ok(!paths.has('packages/extension/chrome/options.html'));
+  assert.ok(!paths.has('packages/extension/chrome/options.js'));
+  assert.ok(!paths.has('packages/extension/chrome/options.css'));
   assert.ok(paths.has('packages/standalone/index.html'));
-  assert.ok(paths.has('review/chrome-web-store.md'));
-  assert.ok(paths.has('review/package-validation.md'));
+  assert.ok(paths.has('review/submission-guide.md'));
+  assert.ok(!paths.has('review/chrome-web-store.md'));
+  assert.ok(!paths.has('review/package-validation.md'));
   assert.ok(paths.has('audit/package-validation.json'));
+  const chrome = result.targetPlans.find(plan => plan.target === 'chrome');
+  assert.equal(chrome.manifest.action.default_popup, 'popup.html');
+  assert.equal(chrome.manifest.options_ui, undefined);
   assert.ok(result.zip.byteLength > 0);
 });
 
-test('release artifacts are store-ready and separate from the project bundle', async () => {
+test('release artifacts are store-ready without markdown notes clutter', async () => {
   const result = await compileUserscriptProject(fixture, { outputType: 'uint8array' });
   const chrome = result.releaseArtifacts.find(artifact => artifact.target === 'chrome' && artifact.kind === 'zip');
   const firefox = result.releaseArtifacts.find(artifact => artifact.target === 'firefox' && artifact.kind === 'xpi');
   const safari = result.releaseArtifacts.find(artifact => artifact.target === 'safari' && artifact.kind === 'directory');
-  const firefoxAndroid = result.releaseArtifacts.find(artifact => artifact.target === 'firefox-android' && artifact.kind === 'notes');
 
   assert.ok(chrome);
   assert.ok(firefox);
   assert.ok(safari);
-  assert.ok(firefoxAndroid);
+  assert.equal(result.releaseArtifacts.some(artifact => artifact.kind === 'notes'), false);
 
   const chromeZip = await JSZip.loadAsync(chrome.content);
   assert.ok(chromeZip.file('manifest.json'));
   assert.ok(chromeZip.file('background.js'));
+  assert.ok(chromeZip.file('popup.html'));
+  assert.equal(chromeZip.file('options.html'), null);
   assert.equal(chromeZip.file('packages/extension/chrome/manifest.json'), null);
 
   const projectZip = await JSZip.loadAsync(result.zip);
@@ -116,25 +127,25 @@ test('packaged raster icons are declared in extension manifests', async () => {
     newTabPath: 'newtab/index.html',
     newTabFiles: [
       { path: 'newtab/index.html', content: '<!doctype html><title>New tab</title>' },
-      { path: 'newtab/icons/icon16.png', content: 'icon16' },
-      { path: 'newtab/icons/icon32.png', content: 'icon32' },
+      { path: 'newtab/icons/yomu-icon-16.png', content: 'icon16' },
+      { path: 'newtab/icons/yomu_icon_32.png', content: 'icon32' },
       { path: 'newtab/icons/icon48.png', content: 'icon48' },
-      { path: 'newtab/icons/icon128.png', content: 'icon128' },
+      { path: 'newtab/icons/yomu-icon-128.png', content: 'icon128' },
     ],
     outputType: 'uint8array',
   });
   const chrome = result.targetPlans.find(plan => plan.target === 'chrome');
   assert.deepEqual(chrome.manifest.icons, {
-    16: 'newtab/icons/icon16.png',
-    32: 'newtab/icons/icon32.png',
+    16: 'newtab/icons/yomu-icon-16.png',
+    32: 'newtab/icons/yomu_icon_32.png',
     48: 'newtab/icons/icon48.png',
-    128: 'newtab/icons/icon128.png',
+    128: 'newtab/icons/yomu-icon-128.png',
   });
   assert.deepEqual(chrome.manifest.action.default_icon, chrome.manifest.icons);
   assert.equal(result.packageValidation.targets[0].status, 'ok');
 });
 
-test('review templates avoid misleading broad-access and punctuation copy', async () => {
+test('review copy avoids misleading broad-access and punctuation text', async () => {
   const result = await compileUserscriptProject(fixture, { outputType: 'uint8array' });
   assert.match(result.review.chrome, /Declared purpose: QA helper\./);
   assert.doesNotMatch(result.review.chrome, /QA helper\. on/);

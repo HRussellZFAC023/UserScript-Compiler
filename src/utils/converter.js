@@ -33,12 +33,10 @@ const TARGETS = ['chrome', 'firefox', 'safari'];
 const DEFAULT_OPTIONS = {
   runtimeMode: 'content-script',
   targets: TARGETS,
-  includeOptionsPage: true,
   includeContextMenus: true,
   includeNewTab: false,
   newTabPath: 'newtab.html',
   newTabFiles: [],
-  openOptionsOnInstall: true,
   outputType: undefined,
   projectPackage: true,
 };
@@ -244,7 +242,7 @@ export function analyzeUserscript(scriptText, options = {}) {
   if (/\binnerHTML\s*=/.test(scriptText)) {
     diagnostics.push(warnDiagnostic(
       'amo.innerHTML',
-      'The script assigns to innerHTML. Mozilla lint may warn; document the sanitization/escaping path in reviewer notes.',
+      'The script assigns to innerHTML. Mozilla lint may warn; document the sanitization/escaping path in the submission guide.',
     ));
   }
   if (/\binsertAdjacentHTML\s*\(/.test(scriptText)) {
@@ -307,13 +305,7 @@ export async function compileUserscriptProject(scriptText, options = {}) {
     addText(files, `packages/standalone/${file.path}`, file.content);
   }
 
-  addText(files, 'review/chrome-web-store.md', analysis.review.chrome);
-  addText(files, 'review/mozilla-amo.md', analysis.review.mozilla);
-  addText(files, 'review/safari-app-store.md', analysis.review.safari);
-  addText(files, 'review/firefox-android.md', analysis.review.firefoxAndroid);
-  addText(files, 'review/troubleshooting.md', analysis.review.troubleshooting);
-  addText(files, 'review/package-validation.md', generatePackageValidationMarkdown(packageValidation));
-  addText(files, 'review/release-artifacts.md', generateReleaseArtifactsMarkdown(analysis, releaseArtifacts));
+  addText(files, 'review/submission-guide.md', generateSubmissionGuideMarkdown(analysis, packageValidation, releaseArtifacts));
   addText(files, 'audit/compiler-audit.json', JSON.stringify(toAuditJson(analysis, packageValidation, releaseArtifacts), null, 2) + '\n');
   addText(files, 'audit/package-validation.json', JSON.stringify(packageValidation, null, 2) + '\n');
   addText(files, 'README.md', generateProjectReadme(analysis));
@@ -376,12 +368,6 @@ async function generateReleaseArtifacts(analysis, extensionFilesByTarget, packag
         files: extensionFiles.map(file => file.path),
         validation: validationStatusForTarget(packageValidation, 'firefox'),
       });
-      artifacts.push({
-        target: 'firefox-android',
-        kind: 'notes',
-        path: 'release/firefox-android/README.md',
-        content: generateFirefoxAndroidReleaseReadme(analysis, packageValidation),
-      });
       continue;
     }
 
@@ -397,12 +383,6 @@ async function generateReleaseArtifacts(analysis, extensionFilesByTarget, packag
           content: file.content,
         })),
         validation: validationStatusForTarget(packageValidation, 'safari'),
-      });
-      artifacts.push({
-        target: 'safari',
-        kind: 'notes',
-        path: 'release/safari/README.md',
-        content: generateSafariReleaseReadme(analysis, folder),
       });
     }
   }
@@ -602,12 +582,16 @@ function generateExtensionFiles(analysis, scriptBody, plan) {
   const runtimeMode = plan.runtimeMode;
   const files = [];
   const manifest = plan.manifest;
+  const popupConfig = {
+    newTabPath: resolveNewTabEntryPath(options),
+    videoPlayerPath: findPackagedVideoPlayerPath(options),
+  };
   files.push({ path: 'manifest.json', content: JSON.stringify(manifest, omitUndefined, 2) + '\n' });
   files.push({ path: 'background.js', content: generateBackgroundScript(meta, grants, options, runtimeMode, plan.target) });
   files.push({ path: 'content.js', content: generateContentScript(meta, scriptBody, grants, runtimeMode) });
-  files.push({ path: 'options.html', content: generateOptionsHtml(meta, analysis, plan) });
-  files.push({ path: 'options.js', content: generateOptionsJs(runtimeMode, plan.target) });
-  files.push({ path: 'options.css', content: generateOptionsCss() });
+  files.push({ path: 'popup.html', content: generatePopupHtml(meta, plan) });
+  files.push({ path: 'popup.js', content: generatePopupJs(runtimeMode, plan.target, popupConfig) });
+  files.push({ path: 'popup.css', content: generatePopupCss() });
   if (options.includeNewTab && options.newTabFiles?.length) {
     for (const file of options.newTabFiles) files.push({ path: file.path, content: file.content });
   } else if (options.includeNewTab) {
@@ -625,7 +609,8 @@ function buildManifest(meta, grants, options, target, runtimeMode, diagnostics) 
   const hostPermissions = new Set(deriveHostPermissions(meta, diagnostics));
   const icons = manifestIconsFromPackagedAssets(options);
 
-  if (options.includeOptionsPage || grants.needsStorage) permissions.add('storage');
+  permissions.add('activeTab');
+  if (grants.needsStorage) permissions.add('storage');
   if (options.includeContextMenus && grants.hasMenuCommands) permissions.add(target === 'firefox' ? 'menus' : 'contextMenus');
   if (grants.needsDownloads) permissions.add('downloads');
   if (grants.needsNotifications) permissions.add('notifications');
@@ -659,12 +644,12 @@ function buildManifest(meta, grants, options, target, runtimeMode, diagnostics) 
     host_permissions: [...hostPermissions].sort(),
     action: {
       default_title: name,
+      default_popup: 'popup.html',
       default_icon: icons,
     },
     background: target === 'firefox'
       ? { scripts: ['background.js'] }
       : { service_worker: 'background.js' },
-    options_ui: options.includeOptionsPage ? { page: 'options.html', open_in_tab: true } : undefined,
     content_scripts: runtimeMode === 'content-script' ? [{
       matches: meta.extensionMatches,
       exclude_matches: meta.extensionExcludeMatches.length ? meta.extensionExcludeMatches : undefined,
@@ -698,13 +683,27 @@ function isPackagedRasterIcon(filePath, size) {
   const lower = normalizePackagePath(filePath).toLowerCase();
   const basename = lower.split('/').pop() || '';
   if (!/\.(png|jpg|jpeg|gif|bmp|ico)$/.test(basename)) return false;
-  return basename === `icon${size}.png`
-    || basename === `icon-${size}.png`
-    || basename === `${size}.png`
-    || basename === `icon${size}.jpg`
-    || basename === `icon-${size}.jpg`
-    || basename === `icon${size}.jpeg`
-    || basename === `icon-${size}.jpeg`;
+  const stem = basename.replace(/\.(png|jpg|jpeg|gif|bmp|ico)$/i, '');
+  return stem === size
+    || stem === `icon${size}`
+    || stem === `icon-${size}`
+    || stem === `icon_${size}`
+    || new RegExp(`(?:^|[-_])(?:icon[-_]?)?${size}$`, 'i').test(stem);
+}
+
+function resolveNewTabEntryPath(options) {
+  if (!options.includeNewTab) return '';
+  return normalizePackagePath(options.newTabPath || 'newtab.html');
+}
+
+function findPackagedVideoPlayerPath(options) {
+  const files = options.newTabFiles || [];
+  const candidates = files
+    .map(file => normalizePackagePath(file.path))
+    .filter(path => path.toLowerCase().endsWith('.html'));
+  return candidates.find(path => /(^|\/)video-player\/index\.html$/i.test(path))
+    || candidates.find(path => /(^|\/)(video-player|player)\.html$/i.test(path))
+    || '';
 }
 
 function normalizeMetaForExtension(meta, diagnostics) {
@@ -855,14 +854,17 @@ function generateBackgroundScript(meta, grants, options, runtimeMode, target) {
 
   const storage = {
     async get(key) {
+      if (!api.storage?.local?.get) return {};
       if (api.storage.local.get.length > 1) return promisify(api.storage.local.get, api.storage.local, key);
       return api.storage.local.get(key);
     },
     async set(value) {
+      if (!api.storage?.local?.set) return undefined;
       if (api.storage.local.set.length > 1) return promisify(api.storage.local.set, api.storage.local, value);
       return api.storage.local.set(value);
     },
     async remove(key) {
+      if (!api.storage?.local?.remove) return undefined;
       if (api.storage.local.remove.length > 1) return promisify(api.storage.local.remove, api.storage.local, key);
       return api.storage.local.remove(key);
     }
@@ -1067,9 +1069,6 @@ function generateBackgroundScript(meta, grants, options, runtimeMode, target) {
       }
       case 'GM_registerMenuCommand':
         return registerMenuCommand(payload, sender);
-      case 'OPEN_OPTIONS':
-        await api.runtime.openOptionsPage?.();
-        return {};
       default:
         return {};
     }
@@ -1101,20 +1100,12 @@ function generateBackgroundScript(meta, grants, options, runtimeMode, target) {
   }
 
 ${registerBlock}
-  async function openOptionsOnInstall(details) {
-    if (${JSON.stringify(Boolean(options.openOptionsOnInstall && options.includeOptionsPage))} && details?.reason === 'install') {
-      try { await api.runtime.openOptionsPage?.(); } catch {}
-    }
-  }
-
   api.runtime?.onInstalled?.addListener(details => {
-    openOptionsOnInstall(details);
     ${runtimeMode === 'user-scripts' ? 'registerUserScript();' : ''}
   });
   api.runtime?.onStartup?.addListener?.(() => {
     ${runtimeMode === 'user-scripts' ? 'registerUserScript();' : ''}
   });
-  api.action?.onClicked?.addListener?.(() => api.runtime.openOptionsPage?.());
   ${runtimeMode === 'user-scripts' ? 'registerUserScript();' : ''}
 })();`;
 }
@@ -1370,8 +1361,9 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 
   function GM_registerMenuCommand(title, callback) {
     const id = 'menu_' + (++menuSeq);
-    menuCallbacks.set(id, callback);
-    gmMessage('GM_registerMenuCommand', { id, title: String(title || 'Userscript command') }).catch(() => {});
+    const label = String(title || 'Userscript command');
+    menuCallbacks.set(id, { title: label, callback });
+    gmMessage('GM_registerMenuCommand', { id, title: label }).catch(() => {});
     return id;
   }
 
@@ -1444,10 +1436,60 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 
   api?.runtime?.onMessage?.addListener((message) => {
     if (message?.channel !== channel || message.type !== 'GM_menuCommand') return;
-    const callback = menuCallbacks.get(message.payload?.id);
-    if (callback) {
-      try { callback(); } catch (error) { console.error(error); }
+    const command = menuCallbacks.get(message.payload?.id);
+    if (command?.callback) {
+      try { command.callback(); } catch (error) { console.error(error); }
     }
+  });
+
+  function runMenuCommandByTitle(command) {
+    const patterns = {
+      settings: [/settings?/i, /preferences?/i, /options?/i],
+      'open-newtab': [/open.*new tab/i, /new tab/i],
+      'open-player': [/video player/i, /open.*video/i, /\\bplayer\\b/i],
+      'toggle-puck': [/puck/i, /floating/i, /toolbar/i],
+      'factory-reset': [/factory reset/i, /\\breset\\b/i]
+    }[command] || [];
+    for (const entry of menuCallbacks.values()) {
+      if (!patterns.some(pattern => pattern.test(entry.title))) continue;
+      try {
+        entry.callback();
+        return true;
+      } catch (error) {
+        console.error(error);
+        return false;
+      }
+    }
+    return false;
+  }
+
+  function dispatchPopupCommand(command) {
+    const detail = { command, source: 'extension-popup' };
+    let handled = runMenuCommandByTitle(command);
+    try {
+      window.dispatchEvent(new CustomEvent('userscript-compiler:command', { detail }));
+      window.dispatchEvent(new CustomEvent('yomu:extension-command', { detail }));
+      const legacyEvent = {
+        settings: 'yomu:open-settings',
+        'open-newtab': 'yomu:open-newtab',
+        'open-player': 'yomu:open-video-player',
+        'toggle-puck': 'yomu:toggle-puck',
+        'factory-reset': 'yomu:factory-reset'
+      }[command];
+      if (legacyEvent) window.dispatchEvent(new CustomEvent(legacyEvent, { detail }));
+      handled = true;
+    } catch (error) {
+      console.error(error);
+    }
+    return handled;
+  }
+
+  api?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
+    if (message?.channel !== channel || message.type !== 'USC_popupCommand') return;
+    const command = String(message.payload?.command || '');
+    const handled = dispatchPopupCommand(command);
+    sendResponse?.({ handled });
+    return false;
   });
 
   api?.runtime?.onMessage?.addListener((message) => {
@@ -1468,185 +1510,230 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 })();`;
 }
 
-function generateOptionsHtml(meta, analysis, plan) {
+function generatePopupHtml(meta, plan) {
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(meta.name || 'Userscript')} Settings</title>
-  <link rel="stylesheet" href="options.css">
+  <title>${escapeHtml(meta.name || 'Userscript')} Menu</title>
+  <link rel="stylesheet" href="popup.css">
 </head>
 <body>
-  <main class="shell">
+  <main>
     <header>
-      <p class="eyebrow">${escapeHtml(plan.target)} package</p>
       <h1>${escapeHtml(meta.name || 'Userscript')}</h1>
-      <p>${escapeHtml(meta.description || 'Converted userscript extension.')}</p>
+      <p>${escapeHtml(plan.target)} package</p>
     </header>
 
-    <section>
-      <h2>Status</h2>
-      <dl>
-        <div><dt>Runtime</dt><dd>${escapeHtml(plan.runtimeMode)}</dd></div>
-        <div><dt>Run at</dt><dd>${escapeHtml(meta.runAt)}</dd></div>
-        <div><dt>Frames</dt><dd>${meta.noFrames ? 'Top frame only' : 'All frames'}</dd></div>
-      </dl>
-      <button type="button" data-action="open-review">Open reviewer notes</button>
-    </section>
+    <div class="menu" role="menu">
+      <button type="button" data-action="settings">Settings</button>
+      <button type="button" data-action="open-newtab">Open new tab</button>
+      <button type="button" data-action="open-player">Open video player</button>
+      <button type="button" data-action="toggle-puck">Toggle puck</button>
+      <button type="button" data-action="factory-reset" class="danger">Factory reset</button>
+    </div>
 
-    <section>
-      <h2>Permissions</h2>
-      <ul>
-        ${plan.manifest.permissions?.map(permission => `<li><code>${escapeHtml(permission)}</code></li>`).join('') || '<li>No API permissions requested.</li>'}
-      </ul>
-      <details>
-        <summary>Host access</summary>
-        <ul>${(plan.manifest.host_permissions || []).map(host => `<li><code>${escapeHtml(host)}</code></li>`).join('')}</ul>
-      </details>
-    </section>
-
-    <section>
-      <h2>Maintenance</h2>
-      <div class="actions">
-        <button type="button" data-action="export-storage">Export storage</button>
-        <button type="button" data-action="clear-storage">Clear storage</button>
-      </div>
-      <p class="status" data-status></p>
-    </section>
-
-    ${plan.runtimeMode === 'user-scripts' ? `<section class="warning">
-      <h2>User scripts permission</h2>
-      <p>Chrome requires the extension details-page toggle for user scripts. Firefox accepts this API as an optional permission and Mozilla policy allows it only for user-script managers.</p>
-    </section>` : ''}
+    <p class="status" data-status></p>
   </main>
-  <script src="options.js"></script>
+  <script src="popup.js"></script>
 </body>
 </html>`;
 }
 
-function generateOptionsJs(runtimeMode, target) {
+function generatePopupJs(runtimeMode, target, config) {
   return `const api = globalThis.browser || globalThis.chrome;
+const config = ${JSON.stringify(config, null, 2)};
 const status = document.querySelector('[data-status]');
 
 function setStatus(message) {
   if (status) status.textContent = message;
 }
 
+function callApi(fn, thisArg, ...args) {
+  if (!fn) return Promise.reject(new Error('Browser API is unavailable.'));
+  if (fn.length > args.length) {
+    return new Promise((resolve, reject) => {
+      try {
+        fn.call(thisArg, ...args, value => {
+          const error = api.runtime?.lastError;
+          if (error) reject(new Error(error.message));
+          else resolve(value);
+        });
+      } catch (error) {
+        reject(error);
+      }
+    });
+  }
+  try {
+    const result = fn.call(thisArg, ...args);
+    return result && typeof result.then === 'function' ? result : Promise.resolve(result);
+  } catch (error) {
+    return Promise.reject(error);
+  }
+}
+
 async function send(type, payload = {}) {
   return api.runtime.sendMessage({ channel: 'userscript-compiler', type, payload });
+}
+
+function extensionUrl(path) {
+  return api.runtime.getURL(String(path || '').replace(/^\\/+/, ''));
+}
+
+async function openPath(path) {
+  await callApi(api.tabs?.create, api.tabs, { url: extensionUrl(path), active: true });
+}
+
+async function openNewTab() {
+  if (config.newTabPath) {
+    await openPath(config.newTabPath);
+    return;
+  }
+  await callApi(api.tabs?.create, api.tabs, { active: true });
+}
+
+async function activeTab() {
+  const tabs = await callApi(api.tabs?.query, api.tabs, { active: true, currentWindow: true });
+  return Array.isArray(tabs) ? tabs[0] : undefined;
+}
+
+async function sendActiveCommand(command) {
+  const tab = await activeTab();
+  if (!tab?.id) throw new Error('No active tab.');
+  await callApi(api.tabs?.sendMessage, api.tabs, tab.id, {
+    channel: 'userscript-compiler',
+    type: 'USC_popupCommand',
+    payload: { command }
+  });
+}
+
+function updateAvailability() {
+  const player = document.querySelector('[data-action="open-player"]');
+  if (player && !config.videoPlayerPath) player.title = 'Uses the active tab menu command when no packaged video-player page is present.';
 }
 
 document.addEventListener('click', async event => {
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
+  button.disabled = true;
   try {
-    if (action === 'export-storage') {
-      const data = await send('GM_getAllValues');
-      const blob = new Blob([JSON.stringify(data?.values || {}, null, 2)], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = 'userscript-storage.json';
-      link.click();
-      URL.revokeObjectURL(url);
-      setStatus('Storage exported.');
+    if (action === 'settings') {
+      await sendActiveCommand('settings');
+      setStatus('Settings command sent.');
     }
-    if (action === 'clear-storage') {
+    if (action === 'open-newtab') {
+      await openNewTab();
+      setStatus('New tab opened.');
+    }
+    if (action === 'open-player') {
+      if (config.videoPlayerPath) await openPath(config.videoPlayerPath);
+      else await sendActiveCommand('open-player');
+      setStatus('Video player opened.');
+    }
+    if (action === 'toggle-puck') {
+      await sendActiveCommand('toggle-puck');
+      setStatus('Puck command sent.');
+    }
+    if (action === 'factory-reset') {
+      if (!confirm('Factory reset this extension and clear saved userscript values?')) {
+        setStatus('Reset cancelled.');
+        return;
+      }
       const data = await send('GM_listValues');
-      for (const key of data?.keys || []) await send('GM_deleteValue', { name: key });
-      setStatus('Storage cleared.');
-    }
-    if (action === 'open-review') {
-      window.open('README.md', '_blank', 'noopener');
+      const keys = data?.keys || [];
+      for (const key of keys) await send('GM_deleteValue', { name: key });
+      await sendActiveCommand('factory-reset').catch(() => {});
+      setStatus(keys.length ? \`Deleted \${keys.length} saved value\${keys.length === 1 ? '' : 's'}.\` : 'No saved values found.');
     }
   } catch (error) {
     setStatus(error?.message || String(error));
+  } finally {
+    button.disabled = false;
+    updateAvailability();
   }
 });
 
+updateAvailability();
 setStatus(${JSON.stringify(runtimeMode === 'user-scripts' && target === 'chrome'
     ? 'Enable Allow User Scripts on the extension details page if the script does not start.'
     : 'Ready.')});`;
 }
 
-function generateOptionsCss() {
+function generatePopupCss() {
   return `:root {
   color-scheme: light dark;
   font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  background: #f6f7f9;
+  background: #f8fafc;
   color: #19202a;
 }
 
 body {
   margin: 0;
+  min-width: 260px;
 }
 
-.shell {
-  max-width: 820px;
-  margin: 0 auto;
-  padding: 32px 20px 48px;
+main {
+  padding: 14px;
 }
 
-header, section {
+header {
   border-bottom: 1px solid #d8dee8;
-  padding: 22px 0;
+  margin-bottom: 10px;
+  padding-bottom: 10px;
 }
 
-.eyebrow {
-  margin: 0 0 8px;
+h1 {
+  font-size: 15px;
+  line-height: 1.25;
+  margin: 0;
+}
+
+header p {
   color: #546179;
-  text-transform: uppercase;
   font-size: 12px;
-  letter-spacing: .08em;
+  margin: 4px 0 0;
 }
 
-h1, h2 {
-  margin: 0 0 12px;
-}
-
-p {
-  line-height: 1.55;
-}
-
-dl div {
+.menu {
   display: grid;
-  grid-template-columns: 140px 1fr;
-  gap: 12px;
-  padding: 8px 0;
-}
-
-dt {
-  font-weight: 700;
+  gap: 7px;
 }
 
 button {
-  min-height: 36px;
-  border: 1px solid #1e5bd7;
-  background: #1e5bd7;
-  color: white;
+  min-height: 34px;
+  border: 1px solid #c7d0de;
+  background: #ffffff;
+  color: #172033;
   border-radius: 6px;
-  padding: 0 14px;
+  padding: 0 10px;
   font: inherit;
+  font-size: 13px;
+  text-align: left;
   cursor: pointer;
 }
 
-.actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
+button:hover:not(:disabled) {
+  border-color: #1e5bd7;
+  color: #123f99;
 }
 
-.warning {
-  border-left: 4px solid #b45309;
-  padding-left: 16px;
+button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
 }
 
-code {
-  background: #e9edf5;
-  border-radius: 4px;
-  padding: 2px 4px;
+.danger {
+  color: #a11d1d;
+}
+
+.status {
+  color: #546179;
+  font-size: 12px;
+  line-height: 1.4;
+  min-height: 18px;
+  margin: 10px 0 0;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -1654,14 +1741,23 @@ code {
     background: #10141b;
     color: #edf2fb;
   }
-  header, section {
+  header {
     border-color: #293243;
   }
-  .eyebrow {
+  header p, .status {
     color: #9aa8bd;
   }
-  code {
-    background: #222b3a;
+  button {
+    background: #161d29;
+    border-color: #344155;
+    color: #edf2fb;
+  }
+  button:hover:not(:disabled) {
+    border-color: #7aa2ff;
+    color: #bcd1ff;
+  }
+  .danger {
+    color: #ff9f9f;
   }
 }`;
 }
@@ -1808,7 +1904,7 @@ Use this as truthful draft text. Remove anything that does not match your final 
 
 ## Single Purpose
 
-${meta.name || 'This extension'} packages one userscript for the websites declared in the manifest. Declared purpose: ${purpose}. Its browser features support that single purpose: page injection, saved settings, supported userscript menu commands when declared, and ${options.includeNewTab ? 'a packaged new-tab page' : 'an options page'}.
+${meta.name || 'This extension'} packages one userscript for the websites declared in the manifest. Declared purpose: ${purpose}. Its browser features support that single purpose: page injection, saved settings, supported userscript menu commands when declared, an extension popup menu, and ${options.includeNewTab ? 'a packaged new-tab page' : 'standard browser tab opening'}.
 
 ## Remote Code
 
@@ -1832,7 +1928,7 @@ The extension stores user settings locally in browser extension storage. It does
 ## Reviewer Test Instructions
 
 1. Load the submitted package.
-2. Open the options page and confirm the runtime/permission summary is visible.
+2. Open the extension popup and confirm the menu is visible.
 3. Visit a matching test page from the host permission list.
 4. Use the extension's declared workflow and any declared userscript menu commands.
 5. Confirm settings persist after reloading the page.
@@ -1893,7 +1989,7 @@ Mozilla policy says the \`userScripts\` API is allowed for user-script managers 
 1. Install the generated Firefox package temporarily or through AMO validation.
 2. Grant the requested host permissions if Firefox prompts for site access.
 3. Open a matching page and verify the packaged userscript behavior.
-4. Open the options page and verify settings export/clear.
+4. Open the extension popup and verify expected menu actions for the matching page.
 
 ## Diagnostics
 
@@ -2031,7 +2127,7 @@ ${diagnostics.map(formatDiagnostic).join('\n') || '- None.'}
 function generatePackageValidationMarkdown(packageValidation) {
   return `# Package Validation
 
-The compiler validates generated extension folders before creating store-ready release artifacts. Missing referenced files are treated as blocking errors. Dynamic code and remote executable-code patterns are warnings that need reviewer notes or source changes.
+The compiler validates generated extension folders before creating store-ready release artifacts. Missing referenced files are treated as blocking errors. Dynamic code and remote executable-code patterns are warnings that need submission notes or source changes.
 
 ## Summary
 
@@ -2052,7 +2148,6 @@ function generateReleaseArtifactsMarkdown(analysis, artifacts) {
     if (artifact.kind === 'directory') {
       return `- \`${artifact.path}/\`: Safari Web Extension source folder with \`manifest.json\` at the folder root. Package this through Apple's Safari Web Extension tooling.`;
     }
-    if (artifact.kind === 'notes') return `- \`${artifact.path}\`: review and platform notes.`;
     return `- \`${artifact.path}\`: ${artifact.target} upload package with \`manifest.json\` at archive root.`;
   });
   return `# Release Artifacts
@@ -2065,43 +2160,38 @@ ${lines.join('\n') || '- No release artifacts were generated for the selected ta
 
 - Chrome Web Store: upload the Chrome ZIP from \`release/chrome/\`.
 - Mozilla Add-ons: upload the Firefox XPI from \`release/firefox/\`; upload a separate source package when AMO asks for generated or bundled source.
-- Firefox for Android: use the Firefox package, then read \`release/firefox-android/README.md\` and \`review/firefox-android.md\`.
+- Firefox for Android: use the Firefox package and the Android QA notes in \`review/submission-guide.md\`.
 - Safari: use the generated Safari folder as the web-extension source for Apple's converter or Xcode workflow; the containing app is what goes to App Store review.
 
 Generated for: ${analysis.meta.name || 'Converted Userscript'} ${analysis.meta.version || ''}
 `;
 }
 
-function generateFirefoxAndroidReleaseReadme(analysis, packageValidation) {
-  const firefox = packageValidation.targets.find(target => target.target === 'firefox');
-  return `# Firefox for Android Release Notes
+function generateSubmissionGuideMarkdown(analysis, packageValidation, releaseArtifacts) {
+  return `# Submission and Review Guide
 
-Use the Firefox desktop package as the base AMO artifact:
+Generated for: ${analysis.meta.name || 'Converted Userscript'} ${analysis.meta.version || ''}
 
-\`../firefox/${packageSlug(analysis.meta)}-firefox.xpi\`
+This is the single generated markdown guide for store submission, package validation, release artifacts, and platform review notes. Keep the final answers truthful to the exact package you upload.
 
-Firefox for Android shares the WebExtension package, but review and QA need mobile-specific coverage:
+${demoteMarkdown(generateReleaseArtifactsMarkdown(analysis, releaseArtifacts))}
 
-- Confirm the AMO listing marks the add-on as Android-compatible.
-- Verify core flows without hover-only controls.
-- Re-test host permission prompts, local endpoints, file URLs, downloads, media, and background behavior on Android.
-- Resolve package validation errors before submitting.
+${demoteMarkdown(generatePackageValidationMarkdown(packageValidation))}
 
-Current Firefox package status: \`${firefox?.status || 'not-generated'}\`
+${demoteMarkdown(analysis.review.chrome)}
+
+${demoteMarkdown(analysis.review.mozilla)}
+
+${demoteMarkdown(analysis.review.safari)}
+
+${demoteMarkdown(analysis.review.firefoxAndroid)}
+
+${demoteMarkdown(analysis.review.troubleshooting)}
 `;
 }
 
-function generateSafariReleaseReadme(analysis, folder) {
-  return `# Safari Release Notes
-
-Safari output is a WebExtension source folder, not an App Store-ready archive:
-
-\`${folder}/\`
-
-Package that folder through Apple's Safari Web Extension converter, Xcode, or App Store Connect workflow, then submit the containing macOS/iOS app. Keep all executable code and new-tab assets local to the extension folder.
-
-Generated package: ${analysis.meta.name || 'Converted Userscript'} ${analysis.meta.version || ''}
-`;
+function demoteMarkdown(markdown) {
+  return String(markdown || '').replace(/^(#{1,5})\s/gm, '#$1 ');
 }
 
 function generateProjectReadme(analysis) {
@@ -2125,7 +2215,7 @@ Load the Chrome extension from \`packages/extension/chrome\`. Load the Firefox e
 
 ## Review
 
-Paste-ready store-review drafts and package-validation reports are in \`review/\`. Read them before submitting; they are generated from metadata and still need a human check for accuracy.
+Store-review drafts, package-validation notes, and platform submission help are consolidated in \`review/submission-guide.md\`. Read it before submitting; it is generated from metadata and still needs a human check for accuracy.
 `;
 }
 
@@ -2136,7 +2226,7 @@ Runtime: \`${plan.runtimeMode}\`
 
 Load this directory as the unpacked extension for ${plan.target}. The generated \`manifest.json\` is target-specific; do not submit another target's manifest to this store.
 
-For store submission guidance, see the generated files in \`../../review/\` from the project package.
+For store submission guidance, see \`../../../review/submission-guide.md\` in the generated project package.
 `;
 }
 
@@ -2176,10 +2266,7 @@ const root = process.cwd();
 const required = [
   'packages/userscript/script.user.js',
   'packages/standalone/index.html',
-  'review/chrome-web-store.md',
-  'review/mozilla-amo.md',
-  'review/package-validation.md',
-  'review/release-artifacts.md',
+  'review/submission-guide.md',
 ];
 
 for (const file of required) {
@@ -2652,6 +2739,7 @@ function formatDiagnostic(diagnostic) {
 function permissionJustification(permission, meta, grants) {
   const name = meta.name || 'the packaged userscript';
   const map = {
+    activeTab: `${name} uses the extension popup to send user-selected commands, such as opening settings or toggling the on-page control, to the current tab.`,
     storage: `${name} stores user preferences and userscript data locally in extension storage so settings persist between browser sessions.`,
     downloads: `${name} exposes the userscript's download feature for files the user explicitly requests.`,
     notifications: `${name} shows browser notifications only for userscript events that are visible to the user.`,

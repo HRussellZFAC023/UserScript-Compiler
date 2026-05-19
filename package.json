@@ -1,7 +1,7 @@
 {
   "name": "userscript-compiler",
   "version": "2.0.0",
-  "description": "Compile one userscript into userscript, browser-extension, and standalone web packages with review templates.",
+  "description": "Compile one userscript into userscript, browser-extension, and standalone web packages with a submission guide.",
   "private": true,
   "type": "module",
   "bin": {

@@ -6,7 +6,7 @@ Compile one `.user.js` file into three reviewable packages:
 - browser-extension packages for Chrome, Firefox, and Safari
 - a standalone web harness for baseline testing
 
-The compiler also generates `review/` templates for Chrome Web Store, Mozilla Add-ons, Safari/App Store review notes, Firefox for Android notes, and troubleshooting.
+The compiler also generates one consolidated `review/submission-guide.md` for Chrome Web Store, Mozilla Add-ons, Safari/App Store review notes, Firefox for Android notes, package validation, and troubleshooting.
 When run through the CLI it also writes store-ready release artifacts separately from the project/audit bundle.
 
 ## Why 2.0 Exists
@@ -72,6 +72,7 @@ packages/
   extension/safari/
   standalone/
 review/
+  submission-guide.md
 audit/
 release/
   chrome/*.zip
@@ -116,4 +117,4 @@ npm run compile -- ../yomu-reader/dist/yomu.user.js --out ./compiled-yomu --targ
 node ./compiled-yomu/tools/verify.mjs
 ```
 
-Use the generated `review/` files as the starting point for Chrome, Mozilla, and Safari submissions. Read them before pasting: they are generated from metadata and should stay truthful to the final package.
+Use the generated `review/submission-guide.md` as the starting point for Chrome, Mozilla, and Safari submissions. Read it before pasting: it is generated from metadata and should stay truthful to the final package.
