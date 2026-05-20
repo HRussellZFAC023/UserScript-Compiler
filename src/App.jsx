@@ -19,6 +19,19 @@ const SAMPLE = `// ==UserScript==
   console.log('Example userscript loaded', count + 1);
 })();`;
 
+const TABS = [
+  ['compile', 'Build'],
+  ['audit', 'Check'],
+  ['review', 'Store Text'],
+  ['cli', 'CLI'],
+];
+
+const OUTPUTS = [
+  ['Userscript', 'A readable .user.js for Tampermonkey, Violentmonkey, Greasemonkey, and Safari userscript apps.'],
+  ['Extensions', 'Store-ready Chrome ZIP, Firefox XPI, and Safari Web Extension source folders.'],
+  ['Standalone', 'A simple web harness for checking the same script outside browser-extension packaging.'],
+];
+
 export default function App() {
   const [scriptText, setScriptText] = useState('');
   const [runtimeMode, setRuntimeMode] = useState('content-script');
@@ -62,8 +75,16 @@ export default function App() {
         includeNewTab,
       });
       const href = URL.createObjectURL(compiled.zip);
-      setResult({ ...compiled, href });
-      setActiveTab('audit');
+      const releaseDownloads = compiled.releaseArtifacts
+        .filter(artifact => artifact.kind !== 'directory' && artifact.content)
+        .map(artifact => ({
+          target: artifact.target,
+          kind: artifact.kind,
+          name: artifact.path.split('/').pop(),
+          href: URL.createObjectURL(artifact.content instanceof Blob ? artifact.content : new Blob([artifact.content])),
+      }));
+      const safariRelease = compiled.releaseArtifacts.find(artifact => artifact.target === 'safari' && artifact.kind === 'directory');
+      setResult({ ...compiled, href, releaseDownloads, safariReleasePath: safariRelease?.path || '' });
     } catch (compileError) {
       setError(compileError?.message || 'Compilation failed.');
     } finally {
@@ -85,28 +106,28 @@ export default function App() {
     <main className="min-h-screen bg-slate-50 text-slate-950">
       <div className="mx-auto flex w-full max-w-6xl flex-col gap-4 px-4 py-5">
         <header className="border-b border-slate-200 pb-4">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">UserScript Compiler 2.0</p>
-          <div className="mt-2 flex flex-col gap-2 md:flex-row md:items-end md:justify-between">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-500">UserScript Compiler</p>
+          <div className="mt-2 flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
             <div>
-              <h1 className="text-3xl font-semibold">Compile one script into three packages</h1>
+              <h1 className="text-3xl font-semibold">Turn one userscript into a release project</h1>
               <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-600">
-                Generate a userscript artifact, browser-extension packages, a standalone test harness, and one review-ready submission guide from the same source.
+                Paste a `.user.js`, choose the browsers you want, and build the same feature set as a userscript, browser extension, and standalone page. The compiler keeps the output readable and writes the review notes you need for store submission.
               </p>
             </div>
-            <div className="flex gap-2 text-sm">
-              <span className="rounded border border-slate-300 bg-white px-3 py-2">{errors} errors</span>
-              <span className="rounded border border-slate-300 bg-white px-3 py-2">{warnings} warnings</span>
+            <div className="grid grid-cols-2 gap-2 text-sm">
+              <span className="rounded border border-slate-300 bg-white px-3 py-2 font-semibold">{errors} errors</span>
+              <span className="rounded border border-slate-300 bg-white px-3 py-2 font-semibold">{warnings} warnings</span>
             </div>
+          </div>
+          <div className="mt-4 grid gap-2 text-sm md:grid-cols-3">
+            <div className="rounded border border-slate-200 bg-white p-3"><strong>1. Add your script</strong><br /><span className="text-slate-600">Upload or paste the file you already publish.</span></div>
+            <div className="rounded border border-slate-200 bg-white p-3"><strong>2. Pick outputs</strong><br /><span className="text-slate-600">Use the default runtime unless you truly need native `userScripts`.</span></div>
+            <div className="rounded border border-slate-200 bg-white p-3"><strong>3. Submit with notes</strong><br /><span className="text-slate-600">Use the generated guide to explain permissions and reviewer checks.</span></div>
           </div>
         </header>
 
         <nav className="flex flex-wrap gap-2" aria-label="Compiler sections">
-          {[
-            ['compile', 'Compile'],
-            ['audit', 'Audit'],
-            ['review', 'Submission Guide'],
-            ['cli', 'CLI'],
-          ].map(([tab, label]) => (
+          {TABS.map(([tab, label]) => (
             <button
               key={tab}
               type="button"
@@ -121,6 +142,14 @@ export default function App() {
         {activeTab === 'compile' && (
           <section className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="flex min-h-[540px] flex-col">
+              <div className="mb-3 grid gap-2 text-sm md:grid-cols-3">
+                {OUTPUTS.map(([title, text]) => (
+                  <div key={title} className="rounded border border-slate-200 bg-white p-3">
+                    <strong>{title}</strong>
+                    <p className="mt-1 text-slate-600">{text}</p>
+                  </div>
+                ))}
+              </div>
               <div className="mb-2 flex flex-wrap items-center gap-2">
                 <label className="inline-flex cursor-pointer items-center rounded border border-slate-300 bg-white px-3 py-2 text-sm font-semibold">
                   Upload .user.js
@@ -140,12 +169,32 @@ export default function App() {
 
             <aside className="flex flex-col gap-4">
               <section className="rounded border border-slate-300 bg-white p-4">
-                <h2 className="text-base font-semibold">Package Settings</h2>
-                <h3 className="mt-4 text-xs font-semibold uppercase text-slate-500">Runtime</h3>
+                <h2 className="text-base font-semibold">Build Options</h2>
+                <p className="mt-1 text-sm leading-5 text-slate-600">The defaults are chosen for store review: static content scripts, native menus only when the script declares menu commands, and one consolidated submission guide.</p>
+
+                <h3 className="mt-4 text-xs font-semibold uppercase text-slate-500">Browsers</h3>
+                <div className="mt-2 grid grid-cols-3 gap-2">
+                  {['chrome', 'firefox', 'safari'].map(target => (
+                    <label key={target} className="flex items-center gap-2 text-sm capitalize">
+                      <input type="checkbox" checked={targets.includes(target)} onChange={() => toggleTarget(target)} />
+                      {target}
+                    </label>
+                  ))}
+                </div>
+
+                <h3 className="mt-5 text-xs font-semibold uppercase text-slate-500">Native Extension Features</h3>
+                <label className="mt-2 flex items-start gap-2 text-sm">
+                  <input className="mt-1" type="checkbox" checked={includeNewTab} onChange={event => setIncludeNewTab(event.target.checked)} />
+                  <span><strong>Package a new-tab page</strong><br /><span className="text-slate-600">Use `--newtab-dir` in the CLI for a real built app instead of a placeholder.</span></span>
+                </label>
+
+                <details className="mt-5 rounded border border-slate-200 p-3">
+                  <summary className="cursor-pointer text-sm font-semibold">Advanced runtime</summary>
+                  <p className="mt-2 text-sm leading-5 text-slate-600">Choose native `userScripts` only for script-manager-style products. It adds review friction and browser setup steps.</p>
                 <div className="mt-2 grid gap-2">
                   {[
-                    ['content-script', 'Default: avoids native userScripts review friction.'],
-                    ['user-scripts', 'Advanced: uses browser userScripts API.'],
+                    ['content-script', 'Recommended: avoids native userScripts review friction.'],
+                    ['user-scripts', 'Advanced: uses the browser userScripts API.'],
                     ['auto', 'Let the compiler choose per target.'],
                   ].map(([value, label]) => (
                     <label key={value} className="flex gap-2 text-sm">
@@ -154,22 +203,7 @@ export default function App() {
                     </label>
                   ))}
                 </div>
-
-                <h3 className="mt-5 text-xs font-semibold uppercase text-slate-500">Targets</h3>
-                <div className="mt-2 grid grid-cols-3 gap-2">
-                  {['chrome', 'firefox', 'safari'].map(target => (
-                    <label key={target} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" checked={targets.includes(target)} onChange={() => toggleTarget(target)} />
-                      {target}
-                    </label>
-                  ))}
-                </div>
-
-                <h3 className="mt-5 text-xs font-semibold uppercase text-slate-500">Native Features</h3>
-                <label className="mt-2 flex items-center gap-2 text-sm">
-                  <input type="checkbox" checked={includeNewTab} onChange={event => setIncludeNewTab(event.target.checked)} />
-                  Package a local new-tab override
-                </label>
+                </details>
               </section>
 
               <button
@@ -183,9 +217,25 @@ export default function App() {
 
               {error && <p className="rounded border border-red-300 bg-red-50 p-3 text-sm text-red-800">{error}</p>}
               {result && (
-                <a className="rounded border border-emerald-700 bg-emerald-700 px-4 py-3 text-center text-sm font-semibold text-white" href={result.href} download={result.zipName}>
-                  Download {result.zipName}
-                </a>
+                <section className="rounded border border-emerald-300 bg-emerald-50 p-4 text-sm text-emerald-950">
+                  <h2 className="font-semibold">Project ready</h2>
+                  <p className="mt-1">The project ZIP includes source packages, audit JSON, and one submission guide. Store uploads should use the release files below.</p>
+                  <a className="mt-3 block rounded border border-emerald-700 bg-emerald-700 px-4 py-3 text-center font-semibold text-white" href={result.href} download={result.zipName}>
+                    Download project ZIP
+                  </a>
+                  {result.releaseDownloads?.length ? (
+                    <div className="mt-3 grid gap-2">
+                      {result.releaseDownloads.map(download => (
+                        <a key={`${download.target}-${download.kind}`} className="rounded border border-emerald-600 bg-white px-3 py-2 text-center font-semibold text-emerald-900" href={download.href} download={download.name}>
+                          Download {download.target} {download.kind.toUpperCase()}
+                        </a>
+                      ))}
+                    </div>
+                  ) : null}
+                  {result.safariReleasePath && (
+                    <p className="mt-3 leading-5">Safari source folder: <code>{result.safariReleasePath}</code> inside the project ZIP.</p>
+                  )}
+                </section>
               )}
             </aside>
           </section>
@@ -274,18 +324,18 @@ function ReviewView({ analysis }) {
 }
 
 function CliView({ runtimeMode, targets, includeNewTab }) {
-  const command = `npm run compile -- ./dist/yomu.user.js --out ./compiled-yomu --target ${targets.join(',')} --runtime ${runtimeMode}${includeNewTab ? ' --newtab' : ''}`;
+  const command = `npm run compile -- ./dist/yomu.user.js --out ./compiled-yomu --target ${targets.join(',')} --runtime ${runtimeMode}${includeNewTab ? ' --newtab-dir ./dist/newtab' : ''}`;
   return (
     <section className="rounded border border-slate-300 bg-white p-5">
       <h2 className="text-lg font-semibold">CLI Automation</h2>
       <p className="mt-2 max-w-3xl text-sm leading-6 text-slate-700">
-        The web app and CLI use the same compiler core. Use the CLI in CI to generate extension packages, a submission guide, and audit JSON from a built userscript.
+        The web app and CLI use the same compiler core. Use the CLI in CI after your app build, then upload the target-specific release files instead of the full project bundle.
       </p>
       <pre className="mt-4 overflow-auto rounded bg-slate-950 p-4 text-sm text-slate-100">{command}</pre>
       <div className="mt-5 grid gap-3 text-sm md:grid-cols-3">
         <div className="rounded border border-slate-200 p-3"><strong>1. Build</strong><br />Run your userscript build first.</div>
-        <div className="rounded border border-slate-200 p-3"><strong>2. Compile</strong><br />Generate extension, standalone, and submission packages.</div>
-        <div className="rounded border border-slate-200 p-3"><strong>3. Verify</strong><br />Run the generated project verifier and browser QA.</div>
+        <div className="rounded border border-slate-200 p-3"><strong>2. Compile</strong><br />Generate the userscript, extension, standalone, audit, and review outputs.</div>
+        <div className="rounded border border-slate-200 p-3"><strong>3. Verify</strong><br />Run `tools/verify.mjs`, then load the built extension in each browser you plan to submit.</div>
       </div>
     </section>
   );

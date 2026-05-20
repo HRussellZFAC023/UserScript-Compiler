@@ -61,6 +61,24 @@ test('native userScripts mode emits target-specific permission placement', () =>
   assert.equal(chrome.manifest.content_scripts, undefined);
 });
 
+test('auto runtime chooses native userScripts when page-world access is requested', () => {
+  const pageWorld = fixture.replace('// @grant        GM.xmlHttpRequest', '// @grant        GM.xmlHttpRequest\n// @grant        unsafeWindow\n// @inject-into page');
+  const analysis = analyzeUserscript(pageWorld, { targets: ['chrome', 'firefox', 'safari'], runtimeMode: 'auto' });
+  const chrome = analysis.targetPlans.find(plan => plan.target === 'chrome');
+  const firefox = analysis.targetPlans.find(plan => plan.target === 'firefox');
+  const safari = analysis.targetPlans.find(plan => plan.target === 'safari');
+  assert.equal(chrome.runtimeMode, 'user-scripts');
+  assert.equal(firefox.runtimeMode, 'user-scripts');
+  assert.equal(safari.runtimeMode, 'content-script');
+});
+
+test('invalid compiler options are reported instead of silently compiling chrome defaults', () => {
+  const analysis = analyzeUserscript(fixture, { targets: ['edge'], runtimeMode: 'wat' });
+  assert.ok(analysis.diagnostics.some(diagnostic => diagnostic.code === 'options.target'));
+  assert.ok(analysis.diagnostics.some(diagnostic => diagnostic.code === 'options.runtime'));
+  assert.deepEqual(analysis.targetPlans.map(plan => plan.target), ['chrome']);
+});
+
 test('menu permissions are only requested for scripts with menu commands', () => {
   const withoutMenu = fixture.replace('// @grant        GM_registerMenuCommand\n', '');
   const analysis = analyzeUserscript(withoutMenu, { targets: ['chrome', 'firefox'], runtimeMode: 'content-script' });
@@ -91,7 +109,25 @@ test('compileUserscriptProject emits three package families and one submission g
   const chrome = result.targetPlans.find(plan => plan.target === 'chrome');
   assert.equal(chrome.manifest.action.default_popup, 'popup.html');
   assert.equal(chrome.manifest.options_ui, undefined);
+  const background = result.files.find(file => file.path === 'packages/extension/chrome/background.js')?.content || '';
+  const popupHtml = result.files.find(file => file.path === 'packages/extension/chrome/popup.html')?.content || '';
+  const popup = result.files.find(file => file.path === 'packages/extension/chrome/popup.js')?.content || '';
+  assert.match(background, /USC_listMenuCommands/);
+  assert.match(background, /USC_runMenuCommand/);
+  assert.match(background, /title: command\.title/);
+  assert.match(popup, /USC_listMenuCommands/);
+  assert.match(popup, /data-menu-id/);
+  assert.match(popupHtml, /Script actions/);
+  assert.doesNotMatch(popupHtml, /Toggle puck|Factory Reset|Open video player/);
+  assert.doesNotMatch(popup, /yomu:|toggle-puck|factory-reset|USC_popupCommand/);
   assert.ok(result.zip.byteLength > 0);
+});
+
+test('generated runtime tolerates locked unsafeWindow descriptors', async () => {
+  const result = await compileUserscriptProject(fixture, { targets: ['firefox'], outputType: 'uint8array' });
+  const content = result.files.find(file => file.path === 'packages/extension/firefox/content.js')?.content || '';
+  assert.match(content, /Object\.defineProperty\(globalThis, 'unsafeWindow'/);
+  assert.match(content, /try \{ globalThis\.unsafeWindow = window; \} catch \{\}/);
 });
 
 test('release artifacts are store-ready without markdown notes clutter', async () => {

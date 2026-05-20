@@ -199,6 +199,18 @@ export function analyzeUserscript(scriptText, options = {}) {
   const diagnostics = [];
   const readability = analyzeSourceReadability(scriptText);
 
+  if (compileOptions.invalidTargets.length) {
+    diagnostics.push(errorDiagnostic(
+      'options.target',
+      `Unknown target(s): ${compileOptions.invalidTargets.join(', ')}. Use chrome, firefox, safari, or a comma-separated list of those values.`,
+    ));
+  }
+  if (compileOptions.invalidRuntimeMode) {
+    diagnostics.push(errorDiagnostic(
+      'options.runtime',
+      `Unknown runtime mode: ${compileOptions.invalidRuntimeMode}. Use content-script, user-scripts, or auto.`,
+    ));
+  }
   if (!meta.name) diagnostics.push(errorDiagnostic('metadata.name', 'Missing @name. The extension will be named "Converted Userscript".'));
   if (readability.looksMinified) {
     diagnostics.push(warnDiagnostic(
@@ -261,7 +273,7 @@ export function analyzeUserscript(scriptText, options = {}) {
   const normalized = normalizeMetaForExtension(meta, diagnostics);
   const grants = analyzeGrants(normalized);
   const targetPlans = compileOptions.targets.map(target => {
-    const runtimeMode = chooseRuntimeMode(normalized, compileOptions, target);
+    const runtimeMode = chooseRuntimeMode(normalized, compileOptions, target, grants);
     return {
       target,
       runtimeMode,
@@ -980,16 +992,30 @@ function generateBackgroundScript(meta, grants, options, runtimeMode, target) {
     if (!api.contextMenus && !api.menus) return { id: payload.id, supported: false };
     const menus = api.contextMenus || api.menus;
     const id = String(payload.id);
-    menuCallbacks.set(id, { tabId: sender?.tab?.id, frameId: sender?.frameId });
+    const title = payload.title || 'Userscript command';
+    menuCallbacks.set(id, { tabId: sender?.tab?.id, frameId: sender?.frameId, title });
     try { await promisify(menus.remove, menus, id); } catch {}
     const createOptions = {
       id,
-      title: payload.title || 'Userscript command',
+      title,
       contexts: ['page', 'selection', 'link', 'image', 'video', 'audio']
     };
     if (menus.create.length > 1) await promisify(menus.create, menus, createOptions);
     else menus.create(createOptions);
     return { id, supported: true };
+  }
+
+  async function runRegisteredMenuCommand(payload) {
+    const id = String(payload.id || '');
+    const command = menuCallbacks.get(id);
+    const tabId = payload.tabId || command?.tabId;
+    if (!command || !tabId || !api.tabs?.sendMessage) return { handled: false };
+    await Promise.resolve(api.tabs.sendMessage(tabId, {
+      channel: 'userscript-compiler',
+      type: 'GM_menuCommand',
+      payload: { id }
+    })).catch(() => {});
+    return { handled: true };
   }
 
   async function handleMessage(message, sender) {
@@ -1069,6 +1095,14 @@ function generateBackgroundScript(meta, grants, options, runtimeMode, target) {
       }
       case 'GM_registerMenuCommand':
         return registerMenuCommand(payload, sender);
+      case 'USC_listMenuCommands':
+        return {
+          commands: Array.from(menuCallbacks.entries())
+            .filter(([, command]) => !payload.tabId || !command.tabId || command.tabId === payload.tabId)
+            .map(([id, command]) => ({ id, title: command.title || 'Userscript command' }))
+        };
+      case 'USC_runMenuCommand':
+        return runRegisteredMenuCommand(payload);
       default:
         return {};
     }
@@ -1431,7 +1465,7 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
   try {
     if (!('unsafeWindow' in globalThis)) Object.defineProperty(globalThis, 'unsafeWindow', { value: window, configurable: true });
   } catch {
-    globalThis.unsafeWindow = window;
+    try { globalThis.unsafeWindow = window; } catch {}
   }
 
   api?.runtime?.onMessage?.addListener((message) => {
@@ -1440,56 +1474,6 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
     if (command?.callback) {
       try { command.callback(); } catch (error) { console.error(error); }
     }
-  });
-
-  function runMenuCommandByTitle(command) {
-    const patterns = {
-      settings: [/settings?/i, /preferences?/i, /options?/i],
-      'open-newtab': [/open.*new tab/i, /new tab/i],
-      'open-player': [/video player/i, /open.*video/i, /\\bplayer\\b/i],
-      'toggle-puck': [/puck/i, /floating/i, /toolbar/i],
-      'factory-reset': [/factory reset/i, /\\breset\\b/i]
-    }[command] || [];
-    for (const entry of menuCallbacks.values()) {
-      if (!patterns.some(pattern => pattern.test(entry.title))) continue;
-      try {
-        entry.callback();
-        return true;
-      } catch (error) {
-        console.error(error);
-        return false;
-      }
-    }
-    return false;
-  }
-
-  function dispatchPopupCommand(command) {
-    const detail = { command, source: 'extension-popup' };
-    let handled = runMenuCommandByTitle(command);
-    try {
-      window.dispatchEvent(new CustomEvent('userscript-compiler:command', { detail }));
-      window.dispatchEvent(new CustomEvent('yomu:extension-command', { detail }));
-      const legacyEvent = {
-        settings: 'yomu:open-settings',
-        'open-newtab': 'yomu:open-newtab',
-        'open-player': 'yomu:open-video-player',
-        'toggle-puck': 'yomu:toggle-puck',
-        'factory-reset': 'yomu:factory-reset'
-      }[command];
-      if (legacyEvent) window.dispatchEvent(new CustomEvent(legacyEvent, { detail }));
-      handled = true;
-    } catch (error) {
-      console.error(error);
-    }
-    return handled;
-  }
-
-  api?.runtime?.onMessage?.addListener((message, _sender, sendResponse) => {
-    if (message?.channel !== channel || message.type !== 'USC_popupCommand') return;
-    const command = String(message.payload?.command || '');
-    const handled = dispatchPopupCommand(command);
-    sendResponse?.({ handled });
-    return false;
   });
 
   api?.runtime?.onMessage?.addListener((message) => {
@@ -1526,13 +1510,15 @@ function generatePopupHtml(meta, plan) {
       <p>${escapeHtml(plan.target)} package</p>
     </header>
 
-    <div class="menu" role="menu">
-      <button type="button" data-action="settings">Settings</button>
-      <button type="button" data-action="open-newtab">Open new tab</button>
-      <button type="button" data-action="open-player">Open video player</button>
-      <button type="button" data-action="toggle-puck">Toggle puck</button>
-      <button type="button" data-action="factory-reset" class="danger">Factory reset</button>
-    </div>
+    <section class="section" data-script-menu-section hidden>
+      <p class="label">Script actions</p>
+      <div class="menu" role="menu" data-script-menu></div>
+    </section>
+
+    <section class="section" data-utility-actions-section hidden>
+      <p class="label">Extension actions</p>
+      <div class="menu" role="menu" data-utility-actions></div>
+    </section>
 
     <p class="status" data-status></p>
   </main>
@@ -1545,6 +1531,10 @@ function generatePopupJs(runtimeMode, target, config) {
   return `const api = globalThis.browser || globalThis.chrome;
 const config = ${JSON.stringify(config, null, 2)};
 const status = document.querySelector('[data-status]');
+const scriptMenuSection = document.querySelector('[data-script-menu-section]');
+const scriptMenu = document.querySelector('[data-script-menu]');
+const utilityActionsSection = document.querySelector('[data-utility-actions-section]');
+const utilityActions = document.querySelector('[data-utility-actions]');
 
 function setStatus(message) {
   if (status) status.textContent = message;
@@ -1585,77 +1575,108 @@ async function openPath(path) {
   await callApi(api.tabs?.create, api.tabs, { url: extensionUrl(path), active: true });
 }
 
-async function openNewTab() {
-  if (config.newTabPath) {
-    await openPath(config.newTabPath);
-    return;
-  }
-  await callApi(api.tabs?.create, api.tabs, { active: true });
-}
-
 async function activeTab() {
   const tabs = await callApi(api.tabs?.query, api.tabs, { active: true, currentWindow: true });
   return Array.isArray(tabs) ? tabs[0] : undefined;
 }
 
-async function sendActiveCommand(command) {
-  const tab = await activeTab();
-  if (!tab?.id) throw new Error('No active tab.');
-  await callApi(api.tabs?.sendMessage, api.tabs, tab.id, {
-    channel: 'userscript-compiler',
-    type: 'USC_popupCommand',
-    payload: { command }
-  });
+function renderScriptCommands(commands) {
+  if (!scriptMenu || !scriptMenuSection) return;
+  scriptMenu.textContent = '';
+  if (!commands.length) {
+    scriptMenuSection.hidden = true;
+    return;
+  }
+  for (const command of commands) {
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.dataset.menuId = command.id;
+    button.textContent = command.title || 'Userscript command';
+    scriptMenu.append(button);
+  }
+  scriptMenuSection.hidden = false;
 }
 
-function updateAvailability() {
-  const player = document.querySelector('[data-action="open-player"]');
-  if (player && !config.videoPlayerPath) player.title = 'Uses the active tab menu command when no packaged video-player page is present.';
+async function refreshScriptCommands() {
+  try {
+    const tab = await activeTab();
+    const response = await send('USC_listMenuCommands', { tabId: tab?.id });
+    renderScriptCommands(response?.commands || []);
+  } catch {
+    renderScriptCommands([]);
+  }
+}
+
+function addUtilityButton(action, label, className = '') {
+  if (!utilityActions) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.action = action;
+  button.textContent = label;
+  if (className) button.className = className;
+  utilityActions.append(button);
+}
+
+function renderUtilityActions() {
+  if (!utilityActions || !utilityActionsSection) return;
+  utilityActions.textContent = '';
+  if (config.newTabPath) addUtilityButton('open-newtab', 'Open packaged new tab');
+  if (config.videoPlayerPath) addUtilityButton('open-player', 'Open packaged video player');
+  addUtilityButton('clear-storage', 'Clear saved values', 'danger');
+  utilityActionsSection.hidden = utilityActions.children.length === 0;
 }
 
 document.addEventListener('click', async event => {
+  const scriptButton = event.target.closest('[data-menu-id]');
+  if (scriptButton) {
+    scriptButton.disabled = true;
+    try {
+      const tab = await activeTab();
+      const response = await send('USC_runMenuCommand', { id: scriptButton.dataset.menuId, tabId: tab?.id });
+      setStatus(response?.handled ? 'Script action sent.' : 'Open a matching page and try again.');
+    } catch (error) {
+      setStatus(error?.message || String(error));
+    } finally {
+      scriptButton.disabled = false;
+      await refreshScriptCommands();
+    }
+    return;
+  }
+
   const button = event.target.closest('[data-action]');
   if (!button) return;
   const action = button.dataset.action;
   button.disabled = true;
   try {
-    if (action === 'settings') {
-      await sendActiveCommand('settings');
-      setStatus('Settings command sent.');
-    }
     if (action === 'open-newtab') {
-      await openNewTab();
+      if (!config.newTabPath) throw new Error('No packaged new-tab page was included.');
+      await openPath(config.newTabPath);
       setStatus('New tab opened.');
     }
     if (action === 'open-player') {
-      if (config.videoPlayerPath) await openPath(config.videoPlayerPath);
-      else await sendActiveCommand('open-player');
+      if (!config.videoPlayerPath) throw new Error('No packaged video-player page was included.');
+      await openPath(config.videoPlayerPath);
       setStatus('Video player opened.');
     }
-    if (action === 'toggle-puck') {
-      await sendActiveCommand('toggle-puck');
-      setStatus('Puck command sent.');
-    }
-    if (action === 'factory-reset') {
-      if (!confirm('Factory reset this extension and clear saved userscript values?')) {
+    if (action === 'clear-storage') {
+      if (!confirm('Clear saved userscript values for this extension?')) {
         setStatus('Reset cancelled.');
         return;
       }
       const data = await send('GM_listValues');
       const keys = data?.keys || [];
       for (const key of keys) await send('GM_deleteValue', { name: key });
-      await sendActiveCommand('factory-reset').catch(() => {});
       setStatus(keys.length ? \`Deleted \${keys.length} saved value\${keys.length === 1 ? '' : 's'}.\` : 'No saved values found.');
     }
   } catch (error) {
     setStatus(error?.message || String(error));
   } finally {
     button.disabled = false;
-    updateAvailability();
   }
 });
 
-updateAvailability();
+renderUtilityActions();
+refreshScriptCommands();
 setStatus(${JSON.stringify(runtimeMode === 'user-scripts' && target === 'chrome'
     ? 'Enable Allow User Scripts on the extension details page if the script does not start.'
     : 'Ready.')});`;
@@ -1694,6 +1715,19 @@ header p {
   color: #546179;
   font-size: 12px;
   margin: 4px 0 0;
+}
+
+.section + .section {
+  margin-top: 12px;
+}
+
+.label {
+  color: #546179;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: .05em;
+  margin: 0 0 6px;
+  text-transform: uppercase;
 }
 
 .menu {
@@ -1744,7 +1778,7 @@ button:disabled {
   header {
     border-color: #293243;
   }
-  header p, .status {
+  header p, .status, .label {
     color: #9aa8bd;
   }
   button {
@@ -2524,17 +2558,27 @@ function normalizeExtensionVersion(version) {
   return parts.length ? parts.join('.') : '1.0.0';
 }
 
-function chooseRuntimeMode(meta, options, target) {
+function chooseRuntimeMode(meta, options, target, grants) {
   if (target === 'safari') return 'content-script';
   if (options.runtimeMode === 'user-scripts') return 'user-scripts';
-  if (options.runtimeMode === 'auto' && (meta.unwrap || meta.sandbox || meta.hasUnsafeWindow)) return 'user-scripts';
+  if (options.runtimeMode === 'auto' && (meta.unwrap || meta.sandbox || meta.injectInto === 'page' || grants?.hasUnsafeWindow)) return 'user-scripts';
   return 'content-script';
 }
 
 function normalizeOptions(options) {
   const normalized = { ...DEFAULT_OPTIONS, ...options };
-  normalized.targets = unique((normalized.targets || TARGETS).filter(target => TARGETS.includes(target)));
+  const rawTargets = Array.isArray(normalized.targets)
+    ? normalized.targets.map(target => String(target).trim()).filter(Boolean)
+    : String(normalized.targets || '').split(',').map(target => target.trim()).filter(Boolean);
+  normalized.invalidTargets = unique(rawTargets.filter(target => !TARGETS.includes(target)));
+  normalized.targets = unique(rawTargets.filter(target => TARGETS.includes(target)));
   if (!normalized.targets.length) normalized.targets = ['chrome'];
+  if (!['content-script', 'user-scripts', 'auto'].includes(normalized.runtimeMode)) {
+    normalized.invalidRuntimeMode = normalized.runtimeMode;
+    normalized.runtimeMode = 'content-script';
+  } else {
+    normalized.invalidRuntimeMode = '';
+  }
   return normalized;
 }
 
@@ -2739,7 +2783,7 @@ function formatDiagnostic(diagnostic) {
 function permissionJustification(permission, meta, grants) {
   const name = meta.name || 'the packaged userscript';
   const map = {
-    activeTab: `${name} uses the extension popup to send user-selected commands, such as opening settings or toggling the on-page control, to the current tab.`,
+    activeTab: `${name} uses the extension popup to show and run user-selected menu commands for the current tab only.`,
     storage: `${name} stores user preferences and userscript data locally in extension storage so settings persist between browser sessions.`,
     downloads: `${name} exposes the userscript's download feature for files the user explicitly requests.`,
     notifications: `${name} shows browser notifications only for userscript events that are visible to the user.`,
