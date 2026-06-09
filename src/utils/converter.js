@@ -1262,14 +1262,14 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
     const oldValue = values[name];
     values[name] = value;
     notifyValueListeners(name, oldValue, value, false);
-    return gmMessage('GM_setValue', { name, value });
+    return gmMessage('GM_setValue', { name, value }).catch(() => {});
   }
 
   function GM_deleteValue(name) {
     const oldValue = values[name];
     delete values[name];
     notifyValueListeners(name, oldValue, undefined, false);
-    return gmMessage('GM_deleteValue', { name });
+    return gmMessage('GM_deleteValue', { name }).catch(() => {});
   }
 
   function GM_listValues() {
@@ -1390,7 +1390,7 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 
   function GM_notification(textOrDetails, title) {
     const details = typeof textOrDetails === 'object' ? textOrDetails : { text: String(textOrDetails || ''), title: title || '' };
-    return gmMessage('GM_notification', { details });
+    return gmMessage('GM_notification', { details }).catch(() => {});
   }
 
   function GM_registerMenuCommand(title, callback) {
