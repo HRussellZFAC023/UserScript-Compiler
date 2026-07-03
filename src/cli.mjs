@@ -6,6 +6,11 @@ import { compileUserscriptProject } from './utils/converter.js';
 
 const args = process.argv.slice(2);
 
+if (args.includes('--version') || args.includes('-v')) {
+  console.log('userscript-compiler 2.0');
+  process.exit(0);
+}
+
 if (!args.length || args.includes('--help') || args.includes('-h')) {
   printHelp();
   process.exit(args.length ? 0 : 1);
@@ -15,26 +20,33 @@ const input = args[0] === 'compile' ? args[1] : args[0];
 const flags = parseFlags(args[0] === 'compile' ? args.slice(2) : args.slice(1));
 
 if (!input) {
-  printHelp();
-  process.exit(1);
+  fail('No userscript file given.', 'Usage: userscript-compiler compile path/to/script.user.js [options]');
+}
+if (input.startsWith('--')) {
+  fail(`Expected a userscript path, got the option "${input}".`, 'Put the .user.js path first: userscript-compiler compile ./script.user.js --out ./dist');
 }
 
-const scriptText = await fs.readFile(input, 'utf8');
-const outDir = path.resolve(flags.out || 'compiled-userscript');
+const scriptText = await readScriptInput(input);
+const config = await loadConfig(flags.config, input);
+const outDir = path.resolve(flags.out || config.out || 'compiled-userscript');
 const targets = flags.target
   ? flags.target.split(',').map(value => value.trim()).filter(Boolean)
-  : ['chrome', 'firefox', 'safari'];
-const newTabFiles = flags.newtabDir ? await readAssetDir(flags.newtabDir, 'newtab') : [];
+  : (config.targets || ['chrome', 'firefox', 'safari']);
+const runtimeMode = flags.runtime || config.runtime || 'content-script';
+const newTabDir = flags.newtabDir || config.newtabDir;
+const newTabFiles = newTabDir ? await readAssetDir(newTabDir, 'newtab') : [];
 
 const result = await compileUserscriptProject(scriptText, {
-  runtimeMode: flags.runtime || 'content-script',
+  runtimeMode,
   targets,
-  includeNewTab: Boolean(flags.newtab || flags.newtabDir),
-  newTabPath: flags.newtabDir ? 'newtab/index.html' : 'newtab.html',
+  includeNewTab: Boolean(flags.newtab || newTabDir || config.newtab),
+  newTabPath: newTabDir ? 'newtab/index.html' : 'newtab.html',
   newTabFiles,
-  includeContextMenus: flags.contextMenus !== false,
+  includeContextMenus: flags.contextMenus !== false && config.contextMenus !== false,
   outputType: 'nodebuffer',
-  firefoxId: flags.firefoxId,
+  firefoxId: flags.firefoxId || config.firefoxId,
+  metadataOverrides: config.metadata || undefined,
+  branding: config.branding || undefined,
 });
 
 await fs.mkdir(outDir, { recursive: true });
@@ -146,21 +158,107 @@ function toCamel(value) {
   return value.replace(/-([a-z])/g, (_, char) => char.toUpperCase());
 }
 
+function fail(message, hint) {
+  console.error(`error: ${message}`);
+  if (hint) console.error(`  ${hint}`);
+  process.exit(1);
+}
+
+async function readScriptInput(inputPath) {
+  try {
+    return await fs.readFile(inputPath, 'utf8');
+  } catch (error) {
+    if (error?.code === 'ENOENT') {
+      fail(`Cannot find userscript file: ${inputPath}`, 'Check the path, or run "npm run compile -- --help" for usage.');
+    }
+    if (error?.code === 'EISDIR') {
+      fail(`Expected a .user.js file but got a directory: ${inputPath}`, 'Point at the userscript file itself, e.g. ./dist/script.user.js');
+    }
+    fail(`Could not read ${inputPath}: ${error?.message || error}`);
+  }
+}
+
+// Load an optional JSON config file. Explicit --config wins; otherwise look for
+// userscript-compiler.config.json next to the input script and in the cwd. The
+// config can set defaults (out/targets/runtime/newtabDir/firefoxId), userscript
+// metadata overrides, and popup branding — everything the CLI flags cannot.
+async function loadConfig(explicitPath, inputPath) {
+  const candidates = explicitPath
+    ? [path.resolve(explicitPath)]
+    : [
+        path.join(path.dirname(path.resolve(inputPath)), 'userscript-compiler.config.json'),
+        path.resolve('userscript-compiler.config.json'),
+      ];
+  for (const candidate of candidates) {
+    let text;
+    try {
+      text = await fs.readFile(candidate, 'utf8');
+    } catch (error) {
+      if (explicitPath) fail(`Cannot read config file: ${candidate}`, error?.message || '');
+      continue;
+    }
+    try {
+      const config = JSON.parse(text);
+      if (!explicitPath) console.log(`Using config: ${path.relative(process.cwd(), candidate) || candidate}`);
+      return config;
+    } catch (error) {
+      fail(`Config file is not valid JSON: ${candidate}`, error?.message || '');
+    }
+  }
+  return {};
+}
+
 function printHelp() {
   console.log(`UserScript Compiler 2.0
+Compile one .user.js into userscript, Chrome/Firefox/Safari extension, and
+standalone packages, plus a store submission guide.
 
 Usage:
-  userscript-compiler compile path/to/script.user.js [options]
-  npm run compile -- path/to/script.user.js [options]
+  userscript-compiler <script.user.js> [options]
+  npm run compile -- <script.user.js> [options]
+
+Examples:
+  # Simplest: build all three browser targets into ./compiled-userscript
+  npm run compile -- ./script.user.js
+
+  # Chrome only, into a chosen folder
+  npm run compile -- ./script.user.js --out ./dist --target chrome
+
+  # Package a built new-tab app and brand the popup via a config file
+  npm run compile -- ./script.user.js --newtab-dir ./dist/newtab --config ./usc.config.json
 
 Options:
-  --out <dir>              Output directory (default: compiled-userscript)
-  --target <list>          Comma-separated targets: chrome,firefox,safari
-  --runtime <mode>         content-script, user-scripts, or auto
-  --newtab                 Include a packaged new-tab override
-  --newtab-dir <dir>       Copy a built new-tab directory into each extension
-  --firefox-id <id>        Firefox extension id for browser_specific_settings
-  --zip-only               Skip exploded project files; still writes project and release artifacts
-  --no-context-menus       Disable generated context-menu support
+  --out <dir>          Output directory (default: compiled-userscript)
+  --target <list>      Comma-separated targets from: chrome, firefox, safari
+                       (default: chrome,firefox,safari)
+  --runtime <mode>     content-script (default, store-friendly),
+                       user-scripts (native userScripts API), or auto
+  --newtab             Add a generated placeholder new-tab page
+  --newtab-dir <dir>   Package a built new-tab app (must contain index.html)
+  --firefox-id <id>    Firefox add-on id for browser_specific_settings
+  --config <file>      JSON config with defaults + metadata + popup branding
+                       (auto-detected as userscript-compiler.config.json)
+  --zip-only           Only write the project ZIP + release artifacts
+  --no-context-menus   Do not map GM_registerMenuCommand to native menus
+  -h, --help           Show this help
+  -v, --version        Show the compiler version
+
+Config file (all fields optional):
+  {
+    "out": "./dist",
+    "targets": ["chrome", "firefox"],
+    "runtime": "content-script",
+    "newtabDir": "./dist/newtab",
+    "metadata": { "name": "My Tool", "homepage": "https://example.com" },
+    "branding": {
+      "tagline": "One-line popup subtitle",
+      "homepageLabel": "Docs",
+      "settingsEvent": "my-tool-open-settings",
+      "settingsLabel": "Open settings",
+      "pages": [{ "path": "newtab/index.html", "label": "Dashboard" }]
+    }
+  }
+
+Exit codes: 0 ok, 1 usage/input error, 2 compile or validation errors.
 `);
 }

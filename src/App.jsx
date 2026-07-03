@@ -324,7 +324,7 @@ function ReviewView({ analysis }) {
 }
 
 function CliView({ runtimeMode, targets, includeNewTab }) {
-  const command = `npm run compile -- ./dist/yomu.user.js --out ./compiled-yomu --target ${targets.join(',')} --runtime ${runtimeMode}${includeNewTab ? ' --newtab-dir ./dist/newtab' : ''}`;
+  const command = `npm run compile -- ./script.user.js --out ./compiled --target ${targets.join(',')} --runtime ${runtimeMode}${includeNewTab ? ' --newtab-dir ./dist/newtab' : ''}`;
   return (
     <section className="rounded border border-slate-300 bg-white p-5">
       <h2 className="text-lg font-semibold">CLI Automation</h2>

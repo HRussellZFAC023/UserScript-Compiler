@@ -119,15 +119,68 @@ test('compileUserscriptProject emits three package families and one submission g
   assert.match(popup, /data-menu-id/);
   assert.match(popupHtml, /Page actions/);
   assert.doesNotMatch(popupHtml, /Toggle puck|Factory Reset|Open video player/);
-  assert.doesNotMatch(popup, /yomu:|toggle-puck|factory-reset|USC_popupCommand/);
+  // The generated popup must not leak any brand-specific vocabulary.
+  assert.doesNotMatch(popup, /yomu|toggle-puck|factory-reset|USC_popupCommand|Open Study|open-study|open-player|video player/i);
+  assert.doesNotMatch(popupHtml, /yomu|Read Japanese/i);
   // Popup pages must stay CSP-clean: no inline <script> (only external popup.js).
   assert.doesNotMatch(popupHtml, /<script(?![^>]*\bsrc=)[^>]*>/);
-  // The real popup offers primary user actions, not the developer stub.
-  assert.match(popup, /open-study/);
+  // The generic popup wires page/settings/homepage actions and menu commands.
+  assert.match(popup, /open-page/);
   assert.match(popup, /open-settings/);
+  assert.match(popup, /open-docs/);
   assert.match(popup, /scripting/);
   assert.doesNotMatch(popup, /Open packaged new tab|Clear saved values/);
   assert.ok(result.zip.byteLength > 0);
+});
+
+test('popup output is brand-neutral and derives a clean settings slug', async () => {
+  const script = fixture.replace('// @namespace    https://example.com/qa', '// @namespace    https://github.com/octocat/color-notes');
+  const result = await compileUserscriptProject(script, { targets: ['chrome'], outputType: 'uint8array' });
+  const popupHtml = result.files.find(file => file.path === 'packages/extension/chrome/popup.html')?.content || '';
+  const popupJs = result.files.find(file => file.path === 'packages/extension/chrome/popup.js')?.content || '';
+  // No brand vocabulary leaks into any user's build.
+  assert.doesNotMatch(popupJs, /yomu|Read Japanese|Open Study|video player|https-github-com/i);
+  assert.doesNotMatch(popupHtml, /yomu|Read Japanese/i);
+  // Tagline defaults to @description, not a hardcoded phrase.
+  assert.match(popupHtml, /QA helper/);
+  // settingsEvent is opt-in: empty unless branding asks for it.
+  assert.match(popupJs, /"settingsEvent": ""/);
+});
+
+test('settingsEvent: true auto-derives a clean brand-neutral slug', async () => {
+  const script = fixture.replace('// @namespace    https://example.com/qa', '// @namespace    https://github.com/octocat/color-notes');
+  const result = await compileUserscriptProject(script, {
+    targets: ['chrome'],
+    outputType: 'uint8array',
+    branding: { settingsEvent: true },
+  });
+  const popupJs = result.files.find(file => file.path === 'packages/extension/chrome/popup.js')?.content || '';
+  // Derived from @name ("QA Script"), not the noisy namespace URL.
+  assert.match(popupJs, /"settingsEvent": "qa-script-open-settings"/);
+  assert.doesNotMatch(popupJs, /https-github-com/);
+});
+
+test('branding options customize the popup without editing generated files', async () => {
+  const result = await compileUserscriptProject(fixture, {
+    targets: ['chrome'],
+    outputType: 'uint8array',
+    metadataOverrides: { homepage: 'https://docs.example.com' },
+    branding: {
+      tagline: 'Custom subtitle',
+      homepageLabel: 'Docs',
+      settingsEvent: 'qa-open-settings',
+      settingsLabel: 'Preferences',
+      pages: [{ path: 'newtab/index.html', label: 'Dashboard' }],
+    },
+  });
+  const popupHtml = result.files.find(file => file.path === 'packages/extension/chrome/popup.html')?.content || '';
+  const popupJs = result.files.find(file => file.path === 'packages/extension/chrome/popup.js')?.content || '';
+  assert.match(popupHtml, /Custom subtitle/);
+  assert.match(popupJs, /"homepageUrl": "https:\/\/docs\.example\.com"/);
+  assert.match(popupJs, /"homepageLabel": "Docs"/);
+  assert.match(popupJs, /"settingsEvent": "qa-open-settings"/);
+  assert.match(popupJs, /"settingsLabel": "Preferences"/);
+  assert.match(popupJs, /"label": "Dashboard"/);
 });
 
 test('generated runtime tolerates locked unsafeWindow descriptors', async () => {

@@ -594,20 +594,26 @@ function generateExtensionFiles(analysis, scriptBody, plan) {
   const runtimeMode = plan.runtimeMode;
   const files = [];
   const manifest = plan.manifest;
+  const branding = resolveBranding(meta, options);
   const popupConfig = {
-    newTabPath: resolveNewTabEntryPath(options),
-    videoPlayerPath: findPackagedVideoPlayerPath(options),
-    homepageUrl: meta.homepage || '',
-    // Window CustomEvent the content script listens for to open its settings UI.
-    // The popup dispatches this into the content-script (ISOLATED) world via
-    // scripting.executeScript. Derived from the extension name so the generated
-    // popup stays generic while matching the userscript's own convention.
-    settingsEvent: settingsEventName(meta),
+    // Extra extension pages to expose as popup buttons, e.g. a packaged new-tab
+    // app. Each entry is { path, label }. Empty by default; populated from
+    // branding.pages or auto-detected packaged pages.
+    pages: brandingPages(branding, options),
+    homepageUrl: branding.homepageUrl,
+    homepageLabel: branding.homepageLabel,
+    // Window CustomEvent the content script may listen for to open its own
+    // in-page settings/UI. The popup dispatches it into the content-script
+    // (ISOLATED) world via scripting.executeScript. Off by default (empty);
+    // set branding.settingsEvent to enable an "Open settings" button.
+    settingsEvent: branding.settingsEvent,
+    settingsLabel: branding.settingsLabel,
+    iconPath: branding.iconPath,
   };
   files.push({ path: 'manifest.json', content: JSON.stringify(manifest, omitUndefined, 2) + '\n' });
   files.push({ path: 'background.js', content: generateBackgroundScript(meta, grants, options, runtimeMode, plan.target) });
   files.push({ path: 'content.js', content: generateContentScript(meta, scriptBody, grants, runtimeMode) });
-  files.push({ path: 'popup.html', content: generatePopupHtml(meta, plan) });
+  files.push({ path: 'popup.html', content: generatePopupHtml(meta, plan, branding) });
   files.push({ path: 'popup.js', content: generatePopupJs(runtimeMode, plan.target, popupConfig) });
   files.push({ path: 'popup.css', content: generatePopupCss() });
   if (options.includeNewTab && options.newTabFiles?.length) {
@@ -716,16 +722,6 @@ function isPackagedRasterIcon(filePath, size) {
 function resolveNewTabEntryPath(options) {
   if (!options.includeNewTab) return '';
   return normalizePackagePath(options.newTabPath || 'newtab.html');
-}
-
-function findPackagedVideoPlayerPath(options) {
-  const files = options.newTabFiles || [];
-  const candidates = files
-    .map(file => normalizePackagePath(file.path))
-    .filter(path => path.toLowerCase().endsWith('.html'));
-  return candidates.find(path => /(^|\/)video-player\/index\.html$/i.test(path))
-    || candidates.find(path => /(^|\/)(video-player|player)\.html$/i.test(path))
-    || '';
 }
 
 function normalizeMetaForExtension(meta, diagnostics) {
@@ -1504,15 +1500,81 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 })();`;
 }
 
-function settingsEventName(meta) {
-  const haystack = `${meta.namespace || ''} ${meta.homepage || ''} ${meta.name || ''}`.toLowerCase();
-  if (/yomu/.test(haystack)) return 'yomu-open-settings';
-  const slug = safeIdentifier(meta.namespace || meta.name || 'userscript').replace(/_/g, '-').toLowerCase();
-  return `${slug || 'userscript'}-open-settings`;
+// A brand-neutral slug for the settings CustomEvent, e.g. "color-notes" from a
+// name or namespace URL. Callers opt in via branding.settingsEvent; nothing is
+// hardcoded to any particular script.
+function defaultSettingsSlug(meta) {
+  const source = brandSlugSource(meta.name) || brandSlugSource(meta.namespace) || 'userscript';
+  return safeFilename(source);
 }
 
-function generatePopupHtml(meta, plan) {
-  const name = escapeHtml(meta.name || 'Userscript');
+// Extract a human-meaningful slug from a name or a namespace URL, ignoring the
+// scheme/host noise so "https://github.com/octocat/color-notes" becomes
+// "color-notes" rather than "https-github-com-octocat-color-notes".
+function brandSlugSource(value) {
+  const raw = String(value || '').trim();
+  if (!raw) return '';
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw)) {
+    try {
+      const parsed = new URL(raw);
+      return parsed.pathname.split('/').filter(Boolean).pop() || parsed.hostname.split('.').slice(-2, -1)[0] || parsed.hostname;
+    } catch {
+      return raw.replace(/^[a-z]+:\/\//i, '').split(/[/?#]/).filter(Boolean).pop() || raw;
+    }
+  }
+  return raw;
+}
+
+// Resolve every user-facing string and asset the popup renders. Everything here
+// has a generic default and can be overridden per project via options.branding
+// (typically loaded from a userscript-compiler.config.json). No script-specific
+// vocabulary lives in the compiler core.
+function resolveBranding(meta, options) {
+  const b = (options && options.branding) || {};
+  const name = meta.name || 'Userscript';
+  const homepageUrl = b.homepageUrl !== undefined ? b.homepageUrl : (meta.homepage || '');
+  return {
+    name,
+    tagline: b.tagline !== undefined ? b.tagline : (meta.description || ''),
+    homepageUrl,
+    homepageLabel: b.homepageLabel || 'Homepage',
+    // Opt-in: only rendered when the project asks for an in-page settings button.
+    // Pass a string to set the exact CustomEvent name, or `true` to auto-derive
+    // a clean slug like "<script>-open-settings" from the name/namespace.
+    settingsEvent: b.settingsEvent === true
+      ? `${defaultSettingsSlug(meta)}-open-settings`
+      : (b.settingsEvent || ''),
+    settingsLabel: b.settingsLabel || 'Open settings',
+    // Popup icon path inside the package. Auto-detected from packaged icons when
+    // not set, so a bare userscript with no assets simply shows no icon.
+    iconPath: b.iconPath !== undefined ? b.iconPath : autoBrandIconPath(options),
+    // Extra pages: [{ path, label }]. Defaults to the packaged new-tab page.
+    pages: Array.isArray(b.pages) ? b.pages : undefined,
+  };
+}
+
+function autoBrandIconPath(options) {
+  const icons = manifestIconsFromPackagedAssets(options) || {};
+  return icons['128'] || icons['48'] || icons['32'] || icons['16'] || '';
+}
+
+// Buttons for extra extension pages (e.g. a packaged new-tab app). Uses explicit
+// branding.pages when provided; otherwise offers the packaged new-tab page with
+// a generic label.
+function brandingPages(branding, options) {
+  if (branding.pages) {
+    return branding.pages
+      .filter(page => page && page.path)
+      .map(page => ({ path: normalizePackagePath(page.path), label: page.label || 'Open page' }));
+  }
+  const newTab = resolveNewTabEntryPath(options);
+  return newTab ? [{ path: newTab, label: 'Open new-tab page' }] : [];
+}
+
+function generatePopupHtml(meta, plan, branding) {
+  const resolved = branding || resolveBranding(meta, {});
+  const name = escapeHtml(resolved.name || meta.name || 'Userscript');
+  const tagline = escapeHtml(resolved.tagline || '');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -1528,7 +1590,7 @@ function generatePopupHtml(meta, plan) {
         <img class="brand-mark" data-brand-icon alt="" width="28" height="28" hidden>
         <h1>${name}</h1>
       </div>
-      <p class="tagline" data-tagline>Read Japanese anywhere.</p>
+      ${tagline ? `<p class="tagline" data-tagline>${tagline}</p>` : '<p class="tagline" data-tagline hidden></p>'}
     </header>
 
     <section class="section">
@@ -1556,8 +1618,8 @@ const scriptMenuSection = document.querySelector('[data-script-menu-section]');
 const scriptMenu = document.querySelector('[data-script-menu]');
 const brandIcon = document.querySelector('[data-brand-icon]');
 
-if (brandIcon) {
-  const iconUrl = api?.runtime?.getURL?.('newtab/icons/icon128.png');
+if (brandIcon && config.iconPath) {
+  const iconUrl = api?.runtime?.getURL?.(config.iconPath);
   if (iconUrl) {
     brandIcon.src = iconUrl;
     brandIcon.hidden = false;
@@ -1619,20 +1681,21 @@ function isInjectableTab(tab) {
   return /^https?:|^file:/i.test(url);
 }
 
-// Dispatch the reader's settings-open event inside the content-script (ISOLATED)
-// world of the active tab. Falls back to opening Study if the page is not
-// injectable or the scripting API is unavailable/blocked.
+// Dispatch a script-defined settings-open CustomEvent inside the content-script
+// (ISOLATED) world of the active tab. Only used when the project configures
+// branding.settingsEvent. Falls back to opening the first packaged page if the
+// tab is not injectable or the scripting API is unavailable/blocked.
 async function openSettingsOnActiveTab() {
   const eventName = config.settingsEvent;
   if (!eventName) throw new Error('This build has no in-page settings surface.');
   const tab = await activeTab();
-  if (!tab?.id || !isInjectableTab(tab)) {
-    await openStudyWithSettingsHint();
-    return;
-  }
-  if (!api?.scripting?.executeScript) {
-    await openStudyWithSettingsHint();
-    return;
+  const canInject = tab?.id && isInjectableTab(tab) && api?.scripting?.executeScript;
+  if (!canInject) {
+    if (config.pages && config.pages.length) {
+      await openPath(config.pages[0].path);
+      return;
+    }
+    throw new Error('Open a normal web page (http/https) to reach in-page settings.');
   }
   await api.scripting.executeScript({
     target: { tabId: tab.id },
@@ -1642,19 +1705,11 @@ async function openSettingsOnActiveTab() {
       try {
         window.dispatchEvent(new CustomEvent(name, { detail: {} }));
       } catch (error) {
-        console.error('Failed to open reader settings:', error);
+        console.error('Failed to dispatch settings event:', error);
       }
     },
   });
   window.close();
-}
-
-async function openStudyWithSettingsHint() {
-  if (config.newTabPath) {
-    await openPath(config.newTabPath);
-    return;
-  }
-  throw new Error('Open a normal web page to change reader settings.');
 }
 
 function addButton(container, action, label, opts = {}) {
@@ -1662,6 +1717,7 @@ function addButton(container, action, label, opts = {}) {
   const button = document.createElement('button');
   button.type = 'button';
   button.dataset.action = action;
+  if (opts.path) button.dataset.path = opts.path;
   button.textContent = label;
   if (opts.primary) button.classList.add('primary');
   container.append(button);
@@ -1670,10 +1726,11 @@ function addButton(container, action, label, opts = {}) {
 function renderPrimaryActions() {
   if (!primaryActions) return;
   primaryActions.textContent = '';
-  if (config.newTabPath) addButton(primaryActions, 'open-study', 'Open Study', { primary: true });
-  if (config.videoPlayerPath) addButton(primaryActions, 'open-player', 'Open video player');
-  if (config.settingsEvent) addButton(primaryActions, 'open-settings', 'Settings on this page');
-  if (config.homepageUrl) addButton(primaryActions, 'open-docs', 'Documentation');
+  (config.pages || []).forEach((page, index) => {
+    addButton(primaryActions, 'open-page', page.label || 'Open page', { primary: index === 0, path: page.path });
+  });
+  if (config.settingsEvent) addButton(primaryActions, 'open-settings', config.settingsLabel || 'Open settings');
+  if (config.homepageUrl) addButton(primaryActions, 'open-docs', config.homepageLabel || 'Homepage');
 }
 
 function renderScriptCommands(commands) {
@@ -1725,16 +1782,14 @@ document.addEventListener('click', async event => {
   const action = button.dataset.action;
   button.disabled = true;
   try {
-    if (action === 'open-study') {
-      if (!config.newTabPath) throw new Error('No Study page is packaged in this build.');
-      await openPath(config.newTabPath);
-    } else if (action === 'open-player') {
-      if (!config.videoPlayerPath) throw new Error('No video player is packaged in this build.');
-      await openPath(config.videoPlayerPath);
+    if (action === 'open-page') {
+      const path = button.dataset.path;
+      if (!path) throw new Error('No page is packaged for this button.');
+      await openPath(path);
     } else if (action === 'open-settings') {
       await openSettingsOnActiveTab();
     } else if (action === 'open-docs') {
-      if (!config.homepageUrl) throw new Error('No documentation URL is configured.');
+      if (!config.homepageUrl) throw new Error('No homepage URL is configured.');
       await openUrl(config.homepageUrl);
     }
   } catch (error) {
@@ -1747,7 +1802,7 @@ document.addEventListener('click', async event => {
 renderPrimaryActions();
 refreshScriptCommands();
 setStatus(${JSON.stringify(runtimeMode === 'user-scripts' && target === 'chrome'
-    ? 'Enable Allow User Scripts on the extension details page if the reader does not start.'
+    ? 'Enable Allow User Scripts on the extension details page if the script does not start.'
     : '')});`;
 }
 
