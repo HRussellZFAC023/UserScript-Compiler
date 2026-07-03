@@ -597,6 +597,12 @@ function generateExtensionFiles(analysis, scriptBody, plan) {
   const popupConfig = {
     newTabPath: resolveNewTabEntryPath(options),
     videoPlayerPath: findPackagedVideoPlayerPath(options),
+    homepageUrl: meta.homepage || '',
+    // Window CustomEvent the content script listens for to open its settings UI.
+    // The popup dispatches this into the content-script (ISOLATED) world via
+    // scripting.executeScript. Derived from the extension name so the generated
+    // popup stays generic while matching the userscript's own convention.
+    settingsEvent: settingsEventName(meta),
   };
   files.push({ path: 'manifest.json', content: JSON.stringify(manifest, omitUndefined, 2) + '\n' });
   files.push({ path: 'background.js', content: generateBackgroundScript(meta, grants, options, runtimeMode, plan.target) });
@@ -622,6 +628,10 @@ function buildManifest(meta, grants, options, target, runtimeMode, diagnostics) 
   const icons = manifestIconsFromPackagedAssets(options);
 
   permissions.add('activeTab');
+  // The action popup opens the reader's in-page settings by dispatching its
+  // settings-open event into the active tab's content-script world via
+  // scripting.executeScript. Only content-script builds expose that surface.
+  if (runtimeMode === 'content-script') permissions.add('scripting');
   if (grants.needsStorage) permissions.add('storage');
   if (options.includeContextMenus && grants.hasMenuCommands) permissions.add(target === 'firefox' ? 'menus' : 'contextMenus');
   if (grants.needsDownloads) permissions.add('downloads');
@@ -1494,30 +1504,40 @@ function generateUserScriptApi(meta, grants, runtimeMode) {
 })();`;
 }
 
+function settingsEventName(meta) {
+  const haystack = `${meta.namespace || ''} ${meta.homepage || ''} ${meta.name || ''}`.toLowerCase();
+  if (/yomu/.test(haystack)) return 'yomu-open-settings';
+  const slug = safeIdentifier(meta.namespace || meta.name || 'userscript').replace(/_/g, '-').toLowerCase();
+  return `${slug || 'userscript'}-open-settings`;
+}
+
 function generatePopupHtml(meta, plan) {
+  const name = escapeHtml(meta.name || 'Userscript');
   return `<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>${escapeHtml(meta.name || 'Userscript')} Menu</title>
+  <title>${name}</title>
   <link rel="stylesheet" href="popup.css">
 </head>
 <body>
   <main>
     <header>
-      <h1>${escapeHtml(meta.name || 'Userscript')}</h1>
-      <p>${escapeHtml(plan.target)} package</p>
+      <div class="brand">
+        <img class="brand-mark" data-brand-icon alt="" width="28" height="28" hidden>
+        <h1>${name}</h1>
+      </div>
+      <p class="tagline" data-tagline>Read Japanese anywhere.</p>
     </header>
 
-    <section class="section" data-script-menu-section hidden>
-      <p class="label">Script actions</p>
-      <div class="menu" role="menu" data-script-menu></div>
+    <section class="section">
+      <div class="menu" role="menu" data-primary-actions></div>
     </section>
 
-    <section class="section" data-utility-actions-section hidden>
-      <p class="label">Extension actions</p>
-      <div class="menu" role="menu" data-utility-actions></div>
+    <section class="section" data-script-menu-section hidden>
+      <p class="label">Page actions</p>
+      <div class="menu" role="menu" data-script-menu></div>
     </section>
 
     <p class="status" data-status></p>
@@ -1531,13 +1551,22 @@ function generatePopupJs(runtimeMode, target, config) {
   return `const api = globalThis.browser || globalThis.chrome;
 const config = ${JSON.stringify(config, null, 2)};
 const status = document.querySelector('[data-status]');
+const primaryActions = document.querySelector('[data-primary-actions]');
 const scriptMenuSection = document.querySelector('[data-script-menu-section]');
 const scriptMenu = document.querySelector('[data-script-menu]');
-const utilityActionsSection = document.querySelector('[data-utility-actions-section]');
-const utilityActions = document.querySelector('[data-utility-actions]');
+const brandIcon = document.querySelector('[data-brand-icon]');
+
+if (brandIcon) {
+  const iconUrl = api?.runtime?.getURL?.('newtab/icons/icon128.png');
+  if (iconUrl) {
+    brandIcon.src = iconUrl;
+    brandIcon.hidden = false;
+    brandIcon.addEventListener('error', () => { brandIcon.hidden = true; }, { once: true });
+  }
+}
 
 function setStatus(message) {
-  if (status) status.textContent = message;
+  if (status) status.textContent = message || '';
 }
 
 function callApi(fn, thisArg, ...args) {
@@ -1571,13 +1600,80 @@ function extensionUrl(path) {
   return api.runtime.getURL(String(path || '').replace(/^\\/+/, ''));
 }
 
+async function openUrl(url) {
+  await callApi(api.tabs?.create, api.tabs, { url, active: true });
+  window.close();
+}
+
 async function openPath(path) {
-  await callApi(api.tabs?.create, api.tabs, { url: extensionUrl(path), active: true });
+  await openUrl(extensionUrl(path));
 }
 
 async function activeTab() {
   const tabs = await callApi(api.tabs?.query, api.tabs, { active: true, currentWindow: true });
   return Array.isArray(tabs) ? tabs[0] : undefined;
+}
+
+function isInjectableTab(tab) {
+  const url = tab?.url || '';
+  return /^https?:|^file:/i.test(url);
+}
+
+// Dispatch the reader's settings-open event inside the content-script (ISOLATED)
+// world of the active tab. Falls back to opening Study if the page is not
+// injectable or the scripting API is unavailable/blocked.
+async function openSettingsOnActiveTab() {
+  const eventName = config.settingsEvent;
+  if (!eventName) throw new Error('This build has no in-page settings surface.');
+  const tab = await activeTab();
+  if (!tab?.id || !isInjectableTab(tab)) {
+    await openStudyWithSettingsHint();
+    return;
+  }
+  if (!api?.scripting?.executeScript) {
+    await openStudyWithSettingsHint();
+    return;
+  }
+  await api.scripting.executeScript({
+    target: { tabId: tab.id },
+    world: 'ISOLATED',
+    args: [eventName],
+    func: name => {
+      try {
+        window.dispatchEvent(new CustomEvent(name, { detail: {} }));
+      } catch (error) {
+        console.error('Failed to open reader settings:', error);
+      }
+    },
+  });
+  window.close();
+}
+
+async function openStudyWithSettingsHint() {
+  if (config.newTabPath) {
+    await openPath(config.newTabPath);
+    return;
+  }
+  throw new Error('Open a normal web page to change reader settings.');
+}
+
+function addButton(container, action, label, opts = {}) {
+  if (!container) return;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.action = action;
+  button.textContent = label;
+  if (opts.primary) button.classList.add('primary');
+  container.append(button);
+}
+
+function renderPrimaryActions() {
+  if (!primaryActions) return;
+  primaryActions.textContent = '';
+  if (config.newTabPath) addButton(primaryActions, 'open-study', 'Open Study', { primary: true });
+  if (config.videoPlayerPath) addButton(primaryActions, 'open-player', 'Open video player');
+  if (config.settingsEvent) addButton(primaryActions, 'open-settings', 'Settings on this page');
+  if (config.homepageUrl) addButton(primaryActions, 'open-docs', 'Documentation');
 }
 
 function renderScriptCommands(commands) {
@@ -1591,7 +1687,7 @@ function renderScriptCommands(commands) {
     const button = document.createElement('button');
     button.type = 'button';
     button.dataset.menuId = command.id;
-    button.textContent = command.title || 'Userscript command';
+    button.textContent = command.title || 'Page command';
     scriptMenu.append(button);
   }
   scriptMenuSection.hidden = false;
@@ -1607,25 +1703,6 @@ async function refreshScriptCommands() {
   }
 }
 
-function addUtilityButton(action, label, className = '') {
-  if (!utilityActions) return;
-  const button = document.createElement('button');
-  button.type = 'button';
-  button.dataset.action = action;
-  button.textContent = label;
-  if (className) button.className = className;
-  utilityActions.append(button);
-}
-
-function renderUtilityActions() {
-  if (!utilityActions || !utilityActionsSection) return;
-  utilityActions.textContent = '';
-  if (config.newTabPath) addUtilityButton('open-newtab', 'Open packaged new tab');
-  if (config.videoPlayerPath) addUtilityButton('open-player', 'Open packaged video player');
-  addUtilityButton('clear-storage', 'Clear saved values', 'danger');
-  utilityActionsSection.hidden = utilityActions.children.length === 0;
-}
-
 document.addEventListener('click', async event => {
   const scriptButton = event.target.closest('[data-menu-id]');
   if (scriptButton) {
@@ -1633,7 +1710,7 @@ document.addEventListener('click', async event => {
     try {
       const tab = await activeTab();
       const response = await send('USC_runMenuCommand', { id: scriptButton.dataset.menuId, tabId: tab?.id });
-      setStatus(response?.handled ? 'Script action sent.' : 'Open a matching page and try again.');
+      setStatus(response?.handled ? 'Sent.' : 'Open a matching page and try again.');
     } catch (error) {
       setStatus(error?.message || String(error));
     } finally {
@@ -1648,25 +1725,17 @@ document.addEventListener('click', async event => {
   const action = button.dataset.action;
   button.disabled = true;
   try {
-    if (action === 'open-newtab') {
-      if (!config.newTabPath) throw new Error('No packaged new-tab page was included.');
+    if (action === 'open-study') {
+      if (!config.newTabPath) throw new Error('No Study page is packaged in this build.');
       await openPath(config.newTabPath);
-      setStatus('New tab opened.');
-    }
-    if (action === 'open-player') {
-      if (!config.videoPlayerPath) throw new Error('No packaged video-player page was included.');
+    } else if (action === 'open-player') {
+      if (!config.videoPlayerPath) throw new Error('No video player is packaged in this build.');
       await openPath(config.videoPlayerPath);
-      setStatus('Video player opened.');
-    }
-    if (action === 'clear-storage') {
-      if (!confirm('Clear saved userscript values for this extension?')) {
-        setStatus('Reset cancelled.');
-        return;
-      }
-      const data = await send('GM_listValues');
-      const keys = data?.keys || [];
-      for (const key of keys) await send('GM_deleteValue', { name: key });
-      setStatus(keys.length ? \`Deleted \${keys.length} saved value\${keys.length === 1 ? '' : 's'}.\` : 'No saved values found.');
+    } else if (action === 'open-settings') {
+      await openSettingsOnActiveTab();
+    } else if (action === 'open-docs') {
+      if (!config.homepageUrl) throw new Error('No documentation URL is configured.');
+      await openUrl(config.homepageUrl);
     }
   } catch (error) {
     setStatus(error?.message || String(error));
@@ -1675,11 +1744,11 @@ document.addEventListener('click', async event => {
   }
 });
 
-renderUtilityActions();
+renderPrimaryActions();
 refreshScriptCommands();
 setStatus(${JSON.stringify(runtimeMode === 'user-scripts' && target === 'chrome'
-    ? 'Enable Allow User Scripts on the extension details page if the script does not start.'
-    : 'Ready.')});`;
+    ? 'Enable Allow User Scripts on the extension details page if the reader does not start.'
+    : '')});`;
 }
 
 function generatePopupCss() {
@@ -1705,16 +1774,30 @@ header {
   padding-bottom: 10px;
 }
 
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.brand-mark {
+  display: block;
+  width: 28px;
+  height: 28px;
+  border-radius: 7px;
+  flex: 0 0 auto;
+}
+
 h1 {
-  font-size: 15px;
-  line-height: 1.25;
+  font-size: 16px;
+  line-height: 1.2;
   margin: 0;
 }
 
-header p {
+header p, .tagline {
   color: #546179;
   font-size: 12px;
-  margin: 4px 0 0;
+  margin: 6px 0 0;
 }
 
 .section + .section {
@@ -1753,13 +1836,22 @@ button:hover:not(:disabled) {
   color: #123f99;
 }
 
+button.primary {
+  background: #1e5bd7;
+  border-color: #1e5bd7;
+  color: #ffffff;
+  font-weight: 600;
+}
+
+button.primary:hover:not(:disabled) {
+  background: #1749ad;
+  border-color: #1749ad;
+  color: #ffffff;
+}
+
 button:disabled {
   cursor: not-allowed;
   opacity: .55;
-}
-
-.danger {
-  color: #a11d1d;
 }
 
 .status {
@@ -1778,7 +1870,7 @@ button:disabled {
   header {
     border-color: #293243;
   }
-  header p, .status, .label {
+  header p, .tagline, .status, .label {
     color: #9aa8bd;
   }
   button {
@@ -1790,8 +1882,15 @@ button:disabled {
     border-color: #7aa2ff;
     color: #bcd1ff;
   }
-  .danger {
-    color: #ff9f9f;
+  button.primary {
+    background: #2f6df0;
+    border-color: #2f6df0;
+    color: #ffffff;
+  }
+  button.primary:hover:not(:disabled) {
+    background: #4880ff;
+    border-color: #4880ff;
+    color: #ffffff;
   }
 }`;
 }

@@ -117,9 +117,16 @@ test('compileUserscriptProject emits three package families and one submission g
   assert.match(background, /title: command\.title/);
   assert.match(popup, /USC_listMenuCommands/);
   assert.match(popup, /data-menu-id/);
-  assert.match(popupHtml, /Script actions/);
+  assert.match(popupHtml, /Page actions/);
   assert.doesNotMatch(popupHtml, /Toggle puck|Factory Reset|Open video player/);
   assert.doesNotMatch(popup, /yomu:|toggle-puck|factory-reset|USC_popupCommand/);
+  // Popup pages must stay CSP-clean: no inline <script> (only external popup.js).
+  assert.doesNotMatch(popupHtml, /<script(?![^>]*\bsrc=)[^>]*>/);
+  // The real popup offers primary user actions, not the developer stub.
+  assert.match(popup, /open-study/);
+  assert.match(popup, /open-settings/);
+  assert.match(popup, /scripting/);
+  assert.doesNotMatch(popup, /Open packaged new tab|Clear saved values/);
   assert.ok(result.zip.byteLength > 0);
 });
 
