@@ -544,6 +544,18 @@ function validateRemoteCode(files, issues) {
 
 function validateTargetSpecificPackage(plan, manifest, issues) {
   if (!manifest) return;
+  // Mirror the browser's install-time pattern check: one malformed entry in
+  // matches/host_permissions is reported as "URL pattern is malformed" and
+  // can leave the extension running nowhere (issue #27).
+  const manifestPatterns = [
+    ...(manifest.content_scripts || []).flatMap(entry => [...(entry.matches || []), ...(entry.exclude_matches || [])]),
+    ...(manifest.host_permissions || []),
+  ];
+  for (const pattern of manifestPatterns) {
+    if (!isInstallableMatchPattern(pattern)) {
+      issues.push(packageIssue('error', `${plan.target}.match-pattern.malformed`, `URL pattern ${pattern} would be rejected at install time ("URL pattern is malformed").`, 'manifest.json'));
+    }
+  }
   if (plan.target === 'chrome' && manifest.background?.scripts) {
     issues.push(packageIssue('error', 'chrome.background.scripts', 'Chrome MV3 packages must use background.service_worker instead of background.scripts.', 'manifest.json'));
   }
@@ -732,8 +744,12 @@ function normalizeMetaForExtension(meta, diagnostics) {
 
   for (const pattern of meta.matches) {
     const normalized = normalizeMatchPattern(pattern);
-    if (normalized.valid) extensionMatches.push(normalized.pattern);
-    else diagnostics.push(warnDiagnostic('metadata.match.invalid', `Could not convert @match ${pattern}. ${normalized.reason}`));
+    if (normalized.valid) {
+      extensionMatches.push(normalized.pattern);
+      if (normalized.repaired) diagnostics.push(warnDiagnostic('metadata.match.repaired', `Rewrote @match ${pattern} as ${normalized.pattern} — browsers reject wildcard hosts like these at install time.`));
+    } else {
+      diagnostics.push(warnDiagnostic('metadata.match.invalid', `Could not convert @match ${pattern}. ${normalized.reason}`));
+    }
   }
 
   for (const pattern of meta.excludeMatches) {
@@ -745,8 +761,12 @@ function normalizeMetaForExtension(meta, diagnostics) {
   for (const include of meta.includes) {
     if (isLikelyMatchPattern(include)) {
       const normalized = normalizeMatchPattern(include);
-      if (normalized.valid) extensionMatches.push(normalized.pattern);
-      else includeGlobs.push(include);
+      if (normalized.valid) {
+        extensionMatches.push(normalized.pattern);
+        if (normalized.repaired) diagnostics.push(infoDiagnostic('metadata.include.repaired', `Rewrote @include ${include} as ${normalized.pattern} — browsers reject wildcard hosts like these at install time.`));
+      } else {
+        includeGlobs.push(include);
+      }
     } else {
       includeGlobs.push(include);
       const hostPattern = includeGlobToHostPattern(include);
@@ -2413,6 +2433,11 @@ function generateExtensionReadme(analysis, plan) {
 Runtime: \`${plan.runtimeMode}\`
 
 Load this directory as the unpacked extension for ${plan.target}. The generated \`manifest.json\` is target-specific; do not submit another target's manifest to this store.
+${plan.target === 'firefox' ? `
+> **Firefox only.** This build uses \`background.scripts\`, which Chrome rejects
+> with "'background.scripts' requires manifest version of 2 or lower". To load
+> in Chrome or Edge, use \`../chrome\` instead.
+` : ''}
 
 For store submission guidance, see \`../../../review/submission-guide.md\` in the generated project package.
 `;
@@ -2622,8 +2647,14 @@ function connectToHostPermissions(value, selfMatches) {
   if (/^https?:\/\//i.test(domain)) return [domain.endsWith('/') ? `${domain}*` : `${domain.replace(/\/?$/, '')}/*`];
   if (domain === 'localhost') return ['http://localhost/*', 'http://127.0.0.1/*'];
   if (/^\d{1,3}(?:\.\d{1,3}){3}$/.test(domain)) return [`http://${domain}/*`, `https://${domain}/*`];
-  if (domain.startsWith('*.')) return [`*://${domain}/*`];
-  return [`*://${domain}/*`, `*://*.${domain}/*`];
+  // Anything left should be a bare domain, but authors also paste URLs and
+  // glob-ish hosts into @connect — run the same host repair so a stray value
+  // never lands in host_permissions as a pattern the browser rejects.
+  const bare = domain.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').split('/')[0];
+  const repaired = repairMatchPatternHost(bare);
+  if (!repaired.valid) return [];
+  if (repaired.host.startsWith('*.')) return [`*://${repaired.host}/*`];
+  return [`*://${repaired.host}/*`, `*://*.${repaired.host}/*`];
 }
 
 function urlToHostPermission(url) {
@@ -2681,13 +2712,51 @@ function normalizeMatchPattern(pattern) {
   if (!value) return { valid: false, reason: 'Empty pattern.' };
   if (value === '<all_urls>') return { valid: true, pattern: '<all_urls>' };
   if (value.startsWith('file://')) return { valid: true, pattern: value.endsWith('*') ? value : `${value.replace(/\/?$/, '/')}*` };
-  if (/^(\*|http|https):\/\/[^/]+\/.*$/i.test(value)) return { valid: true, pattern: value };
+  const parsed = value.match(/^(\*|https?):\/\/([^/]+)(\/.*)?$/i);
+  if (parsed) {
+    const host = repairMatchPatternHost(parsed[2]);
+    if (!host.valid) return { valid: false, reason: host.reason };
+    const normalized = `${parsed[1]}://${host.host}${parsed[3] || '/*'}`;
+    return host.repaired
+      ? { valid: true, pattern: normalized, repaired: true }
+      : { valid: true, pattern: normalized };
+  }
   if (/^[^:/*]+(\.[^/*]+)+(\/.*)?$/.test(value)) return { valid: true, pattern: `*://${value}${value.includes('/') ? '' : '/*'}` };
   return { valid: false, reason: 'Not a WebExtension match pattern.' };
 }
 
+// WebExtension match-pattern hosts only accept `*`, `*.domain`, or a literal
+// domain. Userscript authors routinely write glob hosts (`*example.org*`);
+// shipping those verbatim makes the browser reject the ENTIRE pattern at
+// install time ("URL pattern is malformed") and the content script never
+// runs anywhere — so repair the common glob shapes to the closest valid
+// host (issue #27).
+function repairMatchPatternHost(rawHost) {
+  const host = String(rawHost || '').trim();
+  if (!host) return { valid: false, reason: 'Empty host.' };
+  if (host === '*') return { valid: true, host };
+  const literal = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/i;
+  if (host.startsWith('*.') && literal.test(host.slice(2))) return { valid: true, host };
+  if (literal.test(host)) return { valid: true, host };
+  const core = host.replace(/^\*+\.?/, '').replace(/\.?\*+$/, '').replace(/^\.+|\.+$/g, '');
+  if (!core || core.includes('*')) return { valid: false, reason: `Host "${host}" cannot be expressed as a match-pattern host.` };
+  if (!literal.test(core)) return { valid: false, reason: `Host "${host}" is not a valid hostname.` };
+  // `*.domain` matches the bare domain and every subdomain, which is the
+  // closest superset of what `*domain*`-style globs intend.
+  return { valid: true, host: `*.${core}`, repaired: true };
+}
+
 function isLikelyMatchPattern(value) {
   return value === '<all_urls>' || /^(\*|https?|file):\/\//i.test(value);
+}
+
+function isInstallableMatchPattern(pattern) {
+  const value = String(pattern || '');
+  if (value === '<all_urls>') return true;
+  const parsed = value.match(/^(\*|https?|file):\/\/([^/]*)(\/.*)$/i);
+  if (!parsed) return false;
+  if (parsed[1].toLowerCase() === 'file') return true;
+  return repairMatchPatternHost(parsed[2]).valid && !repairMatchPatternHost(parsed[2]).repaired;
 }
 
 function includeGlobToHostPattern(glob) {
@@ -2697,10 +2766,12 @@ function includeGlobToHostPattern(glob) {
   const scheme = value.match(/^(https?|http\*|\*)\:\/\//i)?.[1];
   let rest = value.replace(/^(https?|http\*|\*)\:\/\//i, '');
   rest = rest.replace(/^\*+/, '*');
-  const host = rest.split('/')[0];
-  if (!host || host === '*') return '<all_urls>';
+  const rawHost = rest.split('/')[0];
+  if (!rawHost || rawHost === '*') return '<all_urls>';
+  const host = repairMatchPatternHost(rawHost);
+  if (!host.valid) return '';
   const normalizedScheme = !scheme || scheme === 'http*' ? '*' : scheme;
-  return `${normalizedScheme}://${host}/*`;
+  return `${normalizedScheme}://${host.host}/*`;
 }
 
 function normalizeExtensionVersion(version) {

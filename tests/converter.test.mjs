@@ -277,3 +277,37 @@ test('package validation warns on dynamic code in generated package output', asy
   assert.equal(chrome.status, 'warning');
   assert.ok(chrome.issues.some(issue => issue.code === 'remote-code.dynamic-eval'));
 });
+
+const globHostFixture = `// ==UserScript==
+// @name         Glob Hosts
+// @version      1.0
+// @include      *://*example.org*/*
+// @include      *forum.example*
+// @connect      https://gist.githubusercontent.com
+// @grant        GM_xmlhttpRequest
+// ==/UserScript==
+
+console.log('glob hosts');`;
+
+// Issue #27: wildcard glob hosts shipped verbatim made Chrome reject every
+// pattern at install ("URL pattern is malformed") and the script ran nowhere.
+test('wildcard glob hosts are repaired into installable match patterns', () => {
+  const analysis = analyzeUserscript(globHostFixture, { targets: ['chrome'], runtimeMode: 'content-script' });
+  const chrome = analysis.targetPlans.find(plan => plan.target === 'chrome');
+  const matches = chrome.manifest.content_scripts[0].matches;
+  assert.ok(matches.includes('*://*.example.org/*'), JSON.stringify(matches));
+  const hostShape = /^(\*|https?):\/\/(\*|\*\.[a-z0-9.-]+|[a-z0-9.-]+)\/.*$/i;
+  for (const pattern of [...matches, ...(chrome.manifest.host_permissions || [])]) {
+    if (pattern === '<all_urls>') continue;
+    assert.ok(hostShape.test(pattern), `not installable: ${pattern}`);
+  }
+  assert.ok(analysis.diagnostics.some(diagnostic => diagnostic.code === 'metadata.include.repaired'));
+});
+
+test('unrepairable glob hosts fail package validation instead of shipping', () => {
+  const analysis = analyzeUserscript(globHostFixture, { targets: ['chrome'], runtimeMode: 'content-script' });
+  const chrome = analysis.targetPlans.find(plan => plan.target === 'chrome');
+  for (const pattern of chrome.manifest.content_scripts[0].matches) {
+    assert.ok(!/:\/\/[^/]*\*[^/]*\*[^/]*\//.test(pattern), `double wildcard host shipped: ${pattern}`);
+  }
+});
